@@ -1,7 +1,7 @@
 // src/lists/entities/album-list.entity.ts
 import {
   Entity, PrimaryGeneratedColumn, Column, Index, CreateDateColumn, UpdateDateColumn, DeleteDateColumn,
-  ManyToOne, OneToMany, JoinColumn
+  ManyToOne, JoinColumn
 } from 'typeorm';
 import { User } from '../user/user.entity';
 //   import { AlbumListItem } from './album-list-item.entity';
@@ -54,6 +54,10 @@ export class AlbumList {
 
   @Column({ type: 'text', nullable: true })
   description?: string;
+
+  // Album references in this list (Spotify album IDs)
+  @Column({ type: 'varchar', array: true, default: '{}' })
+  albumIds: string[];
 
   // Visuals
   @Column({ type: 'varchar', length: 255, nullable: true })

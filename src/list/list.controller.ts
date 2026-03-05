@@ -1,10 +1,12 @@
-import { Controller, Post, Body, Get, Param, Patch, Delete, Query } from "@nestjs/common";
+import { Controller, Post, Body, Get, Param, Patch, Delete, Query, Logger } from "@nestjs/common";
 import { ListService } from "./list.service";
 import { CreateListDto } from "./dto/create-list.dto";
 import { UpdateListDto } from "./dto/update-list.dto";
 
 @Controller('lists')
 export class ListController {
+    private readonly logger = new Logger(ListController.name);
+
     constructor(private readonly listService: ListService) {}
 
     @Post()
@@ -20,6 +22,9 @@ export class ListController {
     ) {
         const offsetNum = offset ? parseInt(offset) : 0;
         const limitNum = limit ? parseInt(limit) : 10;
+        this.logger.log(
+            `[GET /lists] userID=${userID ?? "none"} offset=${offsetNum} limit=${limitNum}`,
+        );
         return this.listService.findAll(userID, offsetNum, limitNum);
     }
 

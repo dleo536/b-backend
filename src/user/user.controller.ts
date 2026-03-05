@@ -16,9 +16,14 @@ export class UserController {
     findAll(
         @Query('p') page?: string,
         @Query('username') username?: string,
+        @Query('oauthId') oauthId?: string,
         @Query('offset') offset?: string,
         @Query('limit') limit?: string,
     ) {
+        if (oauthId) {
+            return this.userService.findByOauthId(oauthId);
+        }
+
         // Handle the duplicate route - if username is provided with offset/limit, use findByUsername
         if (username && (offset !== undefined || limit !== undefined)) {
             const offsetNum = offset ? parseInt(offset) : 0;

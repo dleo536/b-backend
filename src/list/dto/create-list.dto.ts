@@ -1,7 +1,11 @@
 import { IsString, IsNotEmpty, IsOptional, IsArray, IsEnum, Length } from 'class-validator';
-import { ListVisibility } from '../list.entity';
+import { ListType, ListVisibility } from '../list.entity';
 
 export class CreateListDto {
+  @IsString()
+  @IsOptional()
+  ownerId?: string;
+
   @IsString()
   @IsNotEmpty()
   @Length(1, 128)
@@ -19,7 +23,22 @@ export class CreateListDto {
   @IsOptional()
   description?: string;
 
+  @IsEnum(ListType)
+  @IsOptional()
+  listType?: ListType;
+
   @IsEnum(ListVisibility)
   @IsOptional()
   visibility?: ListVisibility;
+
+  @IsArray()
+  @IsOptional()
+  @IsString({ each: true })
+  albumIds?: string[];
+
+  // Legacy payload key used by the mobile client
+  @IsArray()
+  @IsOptional()
+  @IsString({ each: true })
+  albumList?: string[];
 }

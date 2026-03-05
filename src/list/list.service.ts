@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { CreateListDto } from "./dto/create-list.dto";
@@ -8,6 +8,8 @@ import { User } from "../user/user.entity";
 
 @Injectable()
 export class ListService {
+    private readonly logger = new Logger(ListService.name);
+
     constructor(
         @InjectRepository(AlbumList)
         private listRepository: Repository<AlbumList>,
@@ -15,31 +17,94 @@ export class ListService {
         private userRepository: Repository<User>,
     ) {}
 
+    private isUuid(value: string): boolean {
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+    }
+
+    private normalizeAlbumIds(albumIds?: string[]): string[] | undefined {
+        if (albumIds === undefined) {
+            return undefined;
+        }
+
+        return Array.from(
+            new Set(
+                albumIds
+                    .filter((id): id is string => typeof id === "string")
+                    .map((id) => id.trim())
+                    .filter((id) => id.length > 0),
+            ),
+        );
+    }
+
     async create(createListDto: CreateListDto) {
         // Map Firebase UID to User UUID
-        const user = await this.userRepository.findOne({
+        let user = await this.userRepository.findOne({
             where: { oauthId: createListDto.firebaseUid },
         });
+
+        // Fallback if caller already resolved backend ownerId (UUID)
+        if (!user && createListDto.ownerId && this.isUuid(createListDto.ownerId)) {
+            user = await this.userRepository.findOne({
+                where: { id: createListDto.ownerId },
+            });
+        }
+
+        // Fallback for environments where a UUID is being passed directly.
+        if (!user && this.isUuid(createListDto.firebaseUid)) {
+            user = await this.userRepository.findOne({
+                where: { id: createListDto.firebaseUid },
+            });
+        }
 
         if (!user) {
             throw new NotFoundException(`User with Firebase UID ${createListDto.firebaseUid} not found`);
         }
 
+        // Self-heal older users created before oauthId was populated.
+        if (!user.oauthId && createListDto.firebaseUid) {
+            user.oauthId = createListDto.firebaseUid;
+            await this.userRepository.save(user);
+        }
+
+        const albumIds =
+            this.normalizeAlbumIds(createListDto.albumIds ?? createListDto.albumList) ?? [];
+
         const list = this.listRepository.create({
-            ...createListDto,
+            title: createListDto.title,
+            slug: createListDto.slug,
+            description: createListDto.description,
+            visibility: createListDto.visibility,
+            listType: createListDto.listType,
             ownerId: user.id, // Use User UUID for FK
             firebaseUid: createListDto.firebaseUid, // Store Firebase UID separately
+            albumIds,
+            itemsCount: albumIds.length,
         });
         const result = await this.listRepository.save(list);
         return result;
     }
 
     async findAll(userID?: string, offset: number = 0, limit: number = 10) {
-        // Build query filter - Express uses userID, entity uses ownerId
-        const where: any = {};
+        let where: any = {};
+        let linkedUserId: string | null = null;
         if (userID) {
-            where.ownerId = userID;
+            if (this.isUuid(userID)) {
+                where = [{ ownerId: userID }, { firebaseUid: userID }];
+                linkedUserId = userID;
+            } else {
+                const linkedUser = await this.userRepository.findOne({
+                    where: { oauthId: userID },
+                });
+                linkedUserId = linkedUser?.id ?? null;
+                where = linkedUser
+                    ? [{ ownerId: linkedUser.id }, { firebaseUid: userID }]
+                    : { firebaseUid: userID };
+            }
         }
+
+        this.logger.log(
+            `[findAll] userID=${userID ?? "none"} linkedUserId=${linkedUserId ?? "none"} offset=${offset} limit=${limit} where=${JSON.stringify(where)}`,
+        );
 
         // Get the total count of matching documents
         const totalCount = await this.listRepository.count({ where });
@@ -56,6 +121,10 @@ export class ListService {
 
         const hasMore = offset + lists.length < totalCount;
 
+        this.logger.log(
+            `[findAll] resultCount=${lists.length} totalCount=${totalCount} hasMore=${hasMore}`,
+        );
+
         return {
             data: lists,
             hasMore,
@@ -64,8 +133,20 @@ export class ListService {
     }
 
     async findByUserId(userID: string) {
+        let where: any;
+        if (this.isUuid(userID)) {
+            where = [{ ownerId: userID }, { firebaseUid: userID }];
+        } else {
+            const linkedUser = await this.userRepository.findOne({
+                where: { oauthId: userID },
+            });
+            where = linkedUser
+                ? [{ ownerId: linkedUser.id }, { firebaseUid: userID }]
+                : { firebaseUid: userID };
+        }
+
         const lists = await this.listRepository.find({
-            where: { ownerId: userID },
+            where,
             order: {
                 createdAt: 'DESC',
             },
@@ -88,7 +169,27 @@ export class ListService {
 
     async update(id: string, updateListDto: UpdateListDto) {
         const list = await this.findOne(id);
-        Object.assign(list, updateListDto);
+        const normalizedAlbumIds = this.normalizeAlbumIds(
+            updateListDto.albumIds ?? updateListDto.albumList,
+        );
+
+        if (updateListDto.title !== undefined) {
+            list.title = updateListDto.title;
+        }
+        if (updateListDto.description !== undefined) {
+            list.description = updateListDto.description;
+        }
+        if (updateListDto.visibility !== undefined) {
+            list.visibility = updateListDto.visibility;
+        }
+        if (updateListDto.listType !== undefined) {
+            list.listType = updateListDto.listType;
+        }
+        if (normalizedAlbumIds !== undefined) {
+            list.albumIds = normalizedAlbumIds;
+            list.itemsCount = normalizedAlbumIds.length;
+        }
+
         const result = await this.listRepository.save(list);
         return result;
     }

@@ -13,10 +13,16 @@ export class UserService {
     ) {}
 
     async create(createUserDto: CreateUserDto) {
+        const legacyUid = (createUserDto as any).uid;
+        const oauthId =
+            createUserDto.oauthId ??
+            (typeof legacyUid === "string" && legacyUid.length > 0 ? legacyUid : undefined);
+
         const user = this.userRepository.create({
             ...createUserDto,
             usernameLower: createUserDto.username.toLowerCase(),
             emailLower: createUserDto.email?.toLowerCase(),
+            oauthId,
         });
         const result = await this.userRepository.save(user);
         return result;
@@ -46,13 +52,23 @@ export class UserService {
         return users;
     }
 
-    async findOne(identifier: string) {
-        // Try to find by id (uuid) first, then by uid if it exists
-        // For now, we'll use id as the primary identifier
-        // If you need uid support, add a uid column to the entity
+    async findByOauthId(oauthId: string) {
         const user = await this.userRepository.findOne({
+            where: { oauthId },
+        });
+        return user;
+    }
+
+    async findOne(identifier: string) {
+        let user = await this.userRepository.findOne({
             where: { id: identifier },
         });
+
+        if (!user) {
+            user = await this.userRepository.findOne({
+                where: { oauthId: identifier },
+            });
+        }
 
         if (!user) {
             throw new NotFoundException('User not found');

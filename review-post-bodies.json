@@ -1,0 +1,65 @@
+[
+  {
+    "firebaseUid": "REPLACE_WITH_FIREBASE_UID_FOR_USER_13412474-eeaf-4cef-b1a1-e824f465d2e1",
+    "releaseGroupMbId": "d1e9c333-3a9f-44ef-bbbb-999999999999",
+    "albumTitleSnapshot": "Selected Ambient Works 85–92",
+    "artistNameSnapshot": "Aphex Twin",
+    "coverUrlSnapshot": "https://i.scdn.co/image/ab67616d0000b27338906032688bb13b135ce19a",
+    "isSpoiler": false,
+    "isDraft": false,
+    "visibility": "public",
+    "tags": [],
+    "relistenCount": 0
+  },
+  {
+    "firebaseUid": "REPLACE_WITH_FIREBASE_UID_FOR_USER_13412474-eeaf-4cef-b1a1-e824f465d2e1",
+    "releaseGroupMbId": "c2f38c66-7b21-4f3f-8b18-4bfa99999999",
+    "albumTitleSnapshot": "DAMN.",
+    "artistNameSnapshot": "Kendrick Lamar",
+    "coverUrlSnapshot": "https://i.scdn.co/image/ab67616d0000b2738b52c6b9bc4e43d873869699",
+    "isSpoiler": false,
+    "isDraft": false,
+    "visibility": "public",
+    "tags": [],
+    "relistenCount": 0
+  },
+  {
+    "firebaseUid": "REPLACE_WITH_FIREBASE_UID_FOR_USER_13412474-eeaf-4cef-b1a1-e824f465d2e1",
+    "releaseGroupMbId": "a7a82a33-7e7b-4c48-8d99-abcdefabcdef",
+    "albumTitleSnapshot": "In Rainbows",
+    "artistNameSnapshot": "Radiohead",
+    "coverUrlSnapshot": "https://i.scdn.co/image/ab67616d0000b273de3c04b5fc750b68899b20a9",
+    "isSpoiler": false,
+    "isDraft": false,
+    "visibility": "public",
+    "tags": [],
+    "relistenCount": 0
+  },
+  {
+    "firebaseUid": "REPLACE_WITH_FIREBASE_UID_FOR_USER_13412474-eeaf-4cef-b1a1-e824f465d2e1",
+    "releaseGroupMbId": "9e2b73c9-2f90-4b52-99aa-123456789abc",
+    "albumTitleSnapshot": "Blonde",
+    "artistNameSnapshot": "Frank Ocean",
+    "coverUrlSnapshot": "https://i.scdn.co/image/ab67616d0000b273c5649add07ed3720be9d5526",
+    "isSpoiler": false,
+    "isDraft": false,
+    "visibility": "public",
+    "tags": [],
+    "relistenCount": 0
+  },
+  {
+    "firebaseUid": "REPLACE_WITH_FIREBASE_UID_FOR_USER_13412474-eeaf-4cef-b1a1-e824f465d2e1",
+    "releaseGroupMbId": "b9c7c8b2-6e2b-4d6b-9e4c-8d0f14eaa111",
+    "albumTitleSnapshot": "Random Access Memories",
+    "artistNameSnapshot": "Daft Punk",
+    "coverUrlSnapshot": "https://i.scdn.co/image/ab67616d0000b2739b9b36b0e22870b9f542d937",
+    "isSpoiler": false,
+    "isDraft": false,
+    "visibility": "public",
+    "tags": [],
+    "relistenCount": 0
+  }
+]
+
+
+
