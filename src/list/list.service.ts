@@ -1,10 +1,11 @@
 import { Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
+import { In, Repository } from "typeorm";
 import { CreateListDto } from "./dto/create-list.dto";
 import { UpdateListDto } from "./dto/update-list.dto";
 import { AlbumList } from "./list.entity";
 import { User } from "../user/user.entity";
+import { UserFollow } from "../user/follow.entity";
 
 @Injectable()
 export class ListService {
@@ -15,10 +16,27 @@ export class ListService {
         private listRepository: Repository<AlbumList>,
         @InjectRepository(User)
         private userRepository: Repository<User>,
+        @InjectRepository(UserFollow)
+        private followRepository: Repository<UserFollow>,
     ) {}
 
     private isUuid(value: string): boolean {
+        if (typeof value !== "string") {
+            return false;
+        }
         return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+    }
+
+    private async findUserByIdentifier(identifier?: string): Promise<User | null> {
+        if (!identifier) {
+            return null;
+        }
+
+        if (this.isUuid(identifier)) {
+            return this.userRepository.findOne({ where: { id: identifier } });
+        }
+
+        return this.userRepository.findOne({ where: { oauthId: identifier } });
     }
 
     private normalizeAlbumIds(albumIds?: string[]): string[] | undefined {
@@ -84,26 +102,48 @@ export class ListService {
         return result;
     }
 
-    async findAll(userID?: string, offset: number = 0, limit: number = 10) {
+    async findAll(userID?: string, offset: number = 0, limit: number = 10, viewerUid?: string) {
         let where: any = {};
         let linkedUserId: string | null = null;
+        let followFilterMode: "global" | "following" | "user" = "global";
         if (userID) {
+            followFilterMode = "user";
             if (this.isUuid(userID)) {
                 where = [{ ownerId: userID }, { firebaseUid: userID }];
                 linkedUserId = userID;
             } else {
-                const linkedUser = await this.userRepository.findOne({
-                    where: { oauthId: userID },
-                });
+                const linkedUser = await this.findUserByIdentifier(userID);
                 linkedUserId = linkedUser?.id ?? null;
                 where = linkedUser
                     ? [{ ownerId: linkedUser.id }, { firebaseUid: userID }]
                     : { firebaseUid: userID };
             }
+        } else if (viewerUid) {
+            const viewerUser = await this.findUserByIdentifier(viewerUid);
+            linkedUserId = viewerUser?.id ?? null;
+
+            if (viewerUser) {
+                const follows = await this.followRepository.find({
+                    where: { followerId: viewerUser.id },
+                });
+                const followedIds = follows.map((follow) => follow.followingId);
+                const filteredOwnerIds = Array.from(new Set([...followedIds, viewerUser.id]));
+
+                this.logger.log(
+                    `[findAll] viewerUid=${viewerUid} authUserId=${viewerUser.id} followedCount=${followedIds.length}`,
+                );
+
+                if (followedIds.length > 0) {
+                    where = { ownerId: In(filteredOwnerIds) };
+                    followFilterMode = "following";
+                }
+            } else {
+                this.logger.warn(`[findAll] viewerUid=${viewerUid} could not be resolved to a user`);
+            }
         }
 
         this.logger.log(
-            `[findAll] userID=${userID ?? "none"} linkedUserId=${linkedUserId ?? "none"} offset=${offset} limit=${limit} where=${JSON.stringify(where)}`,
+            `[findAll] userID=${userID ?? "none"} viewerUid=${viewerUid ?? "none"} linkedUserId=${linkedUserId ?? "none"} mode=${followFilterMode} offset=${offset} limit=${limit} where=${JSON.stringify(where)}`,
         );
 
         // Get the total count of matching documents
@@ -137,9 +177,7 @@ export class ListService {
         if (this.isUuid(userID)) {
             where = [{ ownerId: userID }, { firebaseUid: userID }];
         } else {
-            const linkedUser = await this.userRepository.findOne({
-                where: { oauthId: userID },
-            });
+            const linkedUser = await this.findUserByIdentifier(userID);
             where = linkedUser
                 ? [{ ownerId: linkedUser.id }, { firebaseUid: userID }]
                 : { firebaseUid: userID };

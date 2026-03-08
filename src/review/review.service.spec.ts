@@ -1,21 +1,21 @@
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
-import { ListService } from "./list.service";
-import { AlbumList } from "./list.entity";
+import { ReviewService } from "./review.service";
+import { Review } from "./review.entity";
 import { User } from "../user/user.entity";
 import { UserFollow } from "../user/follow.entity";
 
 type MockRepository<T> = Partial<Record<keyof Repository<T>, jest.Mock>>;
 
-describe("ListService", () => {
-  let service: ListService;
-  let listRepository: MockRepository<AlbumList>;
+describe("ReviewService", () => {
+  let service: ReviewService;
+  let reviewRepository: MockRepository<Review>;
   let userRepository: MockRepository<User>;
   let followRepository: MockRepository<UserFollow>;
 
   beforeEach(async () => {
-    listRepository = {
+    reviewRepository = {
       count: jest.fn(),
       find: jest.fn(),
       findOne: jest.fn(),
@@ -26,7 +26,6 @@ describe("ListService", () => {
 
     userRepository = {
       findOne: jest.fn(),
-      save: jest.fn(),
     };
 
     followRepository = {
@@ -35,10 +34,10 @@ describe("ListService", () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        ListService,
+        ReviewService,
         {
-          provide: getRepositoryToken(AlbumList),
-          useValue: listRepository,
+          provide: getRepositoryToken(Review),
+          useValue: reviewRepository,
         },
         {
           provide: getRepositoryToken(User),
@@ -51,48 +50,29 @@ describe("ListService", () => {
       ],
     }).compile();
 
-    service = module.get<ListService>(ListService);
+    service = module.get<ReviewService>(ReviewService);
   });
 
-  it("returns an empty data array when current user has no lists", async () => {
-    (userRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "11111111-1111-1111-1111-111111111111",
-      oauthId: "firebase-uid-123",
-    });
-    (listRepository.count as jest.Mock).mockResolvedValue(0);
-    (listRepository.find as jest.Mock).mockResolvedValue([]);
-
-    const result = await service.findAll("firebase-uid-123", 0, 10);
-
-    expect(result).toEqual({
-      data: [],
-      hasMore: false,
-      totalCount: 0,
-    });
-    expect(listRepository.count).toHaveBeenCalled();
-    expect(listRepository.find).toHaveBeenCalled();
-  });
-
-  it("returns global lists when viewer follows no one", async () => {
+  it("returns global reviews when viewer follows no one", async () => {
     (userRepository.findOne as jest.Mock).mockResolvedValue({
       id: "11111111-1111-1111-1111-111111111111",
       oauthId: "viewer-uid",
     });
     (followRepository.find as jest.Mock).mockResolvedValue([]);
-    (listRepository.count as jest.Mock).mockResolvedValue(1);
-    (listRepository.find as jest.Mock).mockResolvedValue([{ id: "global-list-1" }]);
+    (reviewRepository.count as jest.Mock).mockResolvedValue(1);
+    (reviewRepository.find as jest.Mock).mockResolvedValue([{ id: "global-review-1" }]);
 
     const result = await service.findAll(undefined, 0, 10, "viewer-uid");
 
-    expect(result.data).toEqual([{ id: "global-list-1" }]);
-    expect(listRepository.find).toHaveBeenCalledWith(
+    expect(result.data).toEqual([{ id: "global-review-1" }]);
+    expect(reviewRepository.find).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {},
       }),
     );
   });
 
-  it("returns followed + self lists when viewer follows users", async () => {
+  it("returns followed + self reviews when viewer follows users", async () => {
     (userRepository.findOne as jest.Mock).mockResolvedValue({
       id: "11111111-1111-1111-1111-111111111111",
       oauthId: "viewer-uid",
@@ -100,14 +80,14 @@ describe("ListService", () => {
     (followRepository.find as jest.Mock).mockResolvedValue([
       { followerId: "11111111-1111-1111-1111-111111111111", followingId: "22222222-2222-2222-2222-222222222222" },
     ]);
-    (listRepository.count as jest.Mock).mockResolvedValue(1);
-    (listRepository.find as jest.Mock).mockResolvedValue([{ id: "filtered-list-1" }]);
+    (reviewRepository.count as jest.Mock).mockResolvedValue(1);
+    (reviewRepository.find as jest.Mock).mockResolvedValue([{ id: "filtered-review-1" }]);
 
     const result = await service.findAll(undefined, 0, 10, "viewer-uid");
 
-    expect(result.data).toEqual([{ id: "filtered-list-1" }]);
-    const findCall = (listRepository.find as jest.Mock).mock.calls[0][0];
-    expect(findCall.where.ownerId.value.sort()).toEqual([
+    expect(result.data).toEqual([{ id: "filtered-review-1" }]);
+    const findCall = (reviewRepository.find as jest.Mock).mock.calls[0][0];
+    expect(findCall.where.userId.value.sort()).toEqual([
       "11111111-1111-1111-1111-111111111111",
       "22222222-2222-2222-2222-222222222222",
     ]);

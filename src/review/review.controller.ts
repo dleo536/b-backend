@@ -15,12 +15,20 @@ export class ReviewController {
     @Get()
     findAll(
         @Query('userID') userID?: string,
+        @Query('userId') userId?: string,
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
         @Query('offset') offset?: string,
         @Query('limit') limit?: string,
     ) {
         const offsetNum = offset ? parseInt(offset) : 0;
         const limitNum = limit ? parseInt(limit) : 10;
-        return this.reviewService.findAll(userID, offsetNum, limitNum);
+        return this.reviewService.findAll(
+            userID ?? userId,
+            offsetNum,
+            limitNum,
+            viewerId ?? viewerUid,
+        );
     }
 
     @Get(':id')

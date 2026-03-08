@@ -17,15 +17,20 @@ export class ListController {
     @Get()
     findAll(
         @Query('userID') userID?: string,
+        @Query('userId') userId?: string,
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
         @Query('offset') offset?: string,
         @Query('limit') limit?: string,
     ) {
         const offsetNum = offset ? parseInt(offset) : 0;
         const limitNum = limit ? parseInt(limit) : 10;
+        const resolvedUserId = userID ?? userId;
+        const viewerIdentifier = viewerId ?? viewerUid;
         this.logger.log(
-            `[GET /lists] userID=${userID ?? "none"} offset=${offsetNum} limit=${limitNum}`,
+            `[GET /lists] userID=${resolvedUserId ?? "none"} viewer=${viewerIdentifier ?? "none"} offset=${offsetNum} limit=${limitNum}`,
         );
-        return this.listService.findAll(userID, offsetNum, limitNum);
+        return this.listService.findAll(resolvedUserId, offsetNum, limitNum, viewerIdentifier);
     }
 
     @Get(':id')

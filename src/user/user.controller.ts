@@ -37,6 +37,46 @@ export class UserController {
         return this.userService.findAll(pageNum, usersPerPage, username);
     }
 
+    @Post(':id/follow')
+    followUser(
+        @Param('id') id: string,
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
+    ) {
+        return this.userService.followUser(viewerId ?? viewerUid ?? '', id);
+    }
+
+    @Delete(':id/follow')
+    unfollowUser(
+        @Param('id') id: string,
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
+    ) {
+        return this.userService.unfollowUser(viewerId ?? viewerUid ?? '', id);
+    }
+
+    @Get('me/following')
+    getMyFollowing(
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
+    ) {
+        return this.userService.getFollowingByIdentifier(viewerId ?? viewerUid ?? '');
+    }
+
+    @Get(':id/following')
+    getFollowing(@Param('id') id: string) {
+        return this.userService.getFollowingByIdentifier(id);
+    }
+
+    @Get(':id/is-following')
+    isFollowing(
+        @Param('id') id: string,
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
+    ) {
+        return this.userService.isFollowing(viewerId ?? viewerUid ?? '', id);
+    }
+
     @Get(':id')
     findOne(@Param('id') id: string) {
         return this.userService.findOne(id);
