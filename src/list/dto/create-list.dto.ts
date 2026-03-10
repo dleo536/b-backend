@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsOptional, IsArray, IsEnum, Length } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsArray, IsEnum, Length, IsBoolean } from 'class-validator';
 import { ListType, ListVisibility } from '../list.entity';
 
 export class CreateListDto {
@@ -30,6 +30,10 @@ export class CreateListDto {
   @IsEnum(ListVisibility)
   @IsOptional()
   visibility?: ListVisibility;
+
+  @IsBoolean()
+  @IsOptional()
+  isSystem?: boolean;
 
   @IsArray()
   @IsOptional()

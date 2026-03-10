@@ -85,7 +85,16 @@ describe("UserService follow behavior", () => {
       followerId: currentUser.id,
       followingId: targetUser.id,
     });
-    expect(userRepository.save).toHaveBeenCalled();
+    expect(userRepository.save).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: currentUser.id,
+        followingCount: 1,
+      }),
+      expect.objectContaining({
+        id: targetUser.id,
+        followersCount: 1,
+      }),
+    ]);
   });
 
   it("unfollow removes a row", async () => {
@@ -100,7 +109,16 @@ describe("UserService follow behavior", () => {
 
     expect(result.following).toBe(false);
     expect(followRepository.remove).toHaveBeenCalled();
-    expect(userRepository.save).toHaveBeenCalled();
+    expect(userRepository.save).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: currentUser.id,
+        followingCount: 0,
+      }),
+      expect.objectContaining({
+        id: targetUser.id,
+        followersCount: 0,
+      }),
+    ]);
   });
 
   it("cannot follow self", async () => {

@@ -33,6 +33,50 @@ export class ListController {
         return this.listService.findAll(resolvedUserId, offsetNum, limitNum, viewerIdentifier);
     }
 
+    @Get('me/liked')
+    getLikedLists(
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
+        @Query('offset') offset?: string,
+        @Query('limit') limit?: string,
+    ) {
+        const offsetNum = offset ? parseInt(offset) : 0;
+        const limitNum = limit ? parseInt(limit) : 50;
+        return this.listService.getLikedLists(viewerId ?? viewerUid ?? '', offsetNum, limitNum);
+    }
+
+    @Get('detail/:id')
+    getDetail(@Param('id') id: string) {
+        return this.listService.findOne(id);
+    }
+
+    @Post(':id/like')
+    likeList(
+        @Param('id') id: string,
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
+    ) {
+        return this.listService.likeList(id, viewerId ?? viewerUid ?? '');
+    }
+
+    @Delete(':id/like')
+    unlikeList(
+        @Param('id') id: string,
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
+    ) {
+        return this.listService.unlikeList(id, viewerId ?? viewerUid ?? '');
+    }
+
+    @Get(':id/is-liked')
+    isLiked(
+        @Param('id') id: string,
+        @Query('viewerId') viewerId?: string,
+        @Query('viewerUid') viewerUid?: string,
+    ) {
+        return this.listService.isListLiked(id, viewerId ?? viewerUid ?? '');
+    }
+
     @Get(':id')
     findOne(@Param('id') id: string) {
         // Note: In Express, this route finds lists by userID, not list id

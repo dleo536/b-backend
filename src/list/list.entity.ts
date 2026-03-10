@@ -49,6 +49,9 @@ export class AlbumList {
   @Column({ type: 'enum', enum: ListType, default: ListType.CUSTOM })
   listType: ListType;
 
+  @Column({ type: 'boolean', default: false })
+  isSystem: boolean; // true for auto-created lists (Backlog/Favorites)
+
   @Column({ type: 'enum', enum: ListVisibility, default: ListVisibility.PUBLIC })
   visibility: ListVisibility;
 

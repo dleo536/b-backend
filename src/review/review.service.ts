@@ -40,13 +40,37 @@ export class ReviewService {
     }
 
     async create(createReviewDto: CreateReviewDto) {
-        // Map Firebase UID to User UUID
-        const user = await this.userRepository.findOne({
-            where: { oauthId: createReviewDto.firebaseUid },
-        });
+        const firebaseUid = createReviewDto.firebaseUid?.trim();
+        const userId = createReviewDto.userId?.trim();
+        const identifiers = [firebaseUid, userId]
+            .filter((value): value is string => typeof value === "string" && value.length > 0);
+
+        this.logger.log(
+            `[create] identifiers=${identifiers.join(",") || "none"} firebaseUid=${firebaseUid ?? "none"} userId=${userId ?? "none"} releaseGroupMbId=${createReviewDto.releaseGroupMbId}`,
+        );
+
+        if (identifiers.length === 0) {
+            throw new BadRequestException("firebaseUid or userId is required to create a review");
+        }
+
+        let user: User | null = null;
+        let matchedIdentifier: string | null = null;
+        for (const identifier of identifiers) {
+            user = await this.findUserByIdentifier(identifier);
+            if (user) {
+                matchedIdentifier = identifier;
+                break;
+            }
+        }
 
         if (!user) {
-            throw new NotFoundException(`User with Firebase UID ${createReviewDto.firebaseUid} not found`);
+            throw new NotFoundException(`User with identifier(s) ${identifiers.join(", ")} not found`);
+        }
+
+        // Self-heal older users created before oauthId was populated.
+        if (!user.oauthId && matchedIdentifier && !this.isUuid(matchedIdentifier)) {
+            user.oauthId = matchedIdentifier;
+            await this.userRepository.save(user);
         }
 
         // If creating a non-draft review, check if one already exists
@@ -70,7 +94,7 @@ export class ReviewService {
         const review = this.reviewRepository.create({
             ...createReviewDto,
             userId: user.id, // Use User UUID for FK
-            firebaseUid: createReviewDto.firebaseUid, // Store Firebase UID separately
+            firebaseUid: firebaseUid || user.oauthId || (matchedIdentifier && !this.isUuid(matchedIdentifier) ? matchedIdentifier : undefined), // Store Firebase UID separately
         });
         const result = await this.reviewRepository.save(review);
         return result;
@@ -79,7 +103,7 @@ export class ReviewService {
     async findAll(userID?: string, offset: number = 0, limit: number = 10, viewerUid?: string) {
         // Build the query filter
         let where: any = {};
-        let followFilterMode: "global" | "following" | "user" = "global";
+        let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
         let authUserId: string | null = null;
         if (userID) {
             followFilterMode = "user";
@@ -110,8 +134,35 @@ export class ReviewService {
                 );
 
                 if (followedIds.length > 0) {
-                    where.userId = In(filteredUserIds);
-                    followFilterMode = "following";
+                    const followedOnlyWhere = { userId: In(followedIds) };
+                    const followedOnlyCount = await this.reviewRepository.count({ where: followedOnlyWhere });
+
+                    this.logger.log(
+                        `[findAll] following-only totalCount=${followedOnlyCount} where=${JSON.stringify(followedOnlyWhere)}`,
+                    );
+
+                    if (followedOnlyCount > 0) {
+                        const filteredWhere = { userId: In(filteredUserIds) };
+                        const filteredTotalCount = await this.reviewRepository.count({ where: filteredWhere });
+                        const reviews = await this.reviewRepository.find({
+                            where: filteredWhere,
+                            skip: offset,
+                            take: limit,
+                            order: {
+                                createdAt: 'DESC',
+                            },
+                        });
+                        const hasMore = offset + reviews.length < filteredTotalCount;
+
+                        return {
+                            data: reviews,
+                            hasMore,
+                            totalCount: filteredTotalCount,
+                            mode: "following",
+                        };
+                    }
+
+                    followFilterMode = "global-fallback";
                 }
             } else {
                 this.logger.warn(`[findAll] viewerUid=${viewerUid} could not be resolved to a user`);
@@ -141,6 +192,7 @@ export class ReviewService {
             data: reviews,
             hasMore,
             totalCount,
+            mode: followFilterMode,
         };
     }
 

@@ -3,10 +3,11 @@ import { IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsNotEmpty, IsOptional, I
 import { ReviewVisibility } from '../review.entity';
 
 export class CreateReviewDto {
-  @IsString()
-  @IsNotEmpty()
-  @Length(1, 128)
-  firebaseUid: string; // Firebase UID - will be mapped to User.id (UUID) in service
+  @IsOptional() @IsString() @Length(1, 128)
+  firebaseUid?: string; // Firebase UID - mapped to User.id in service
+
+  @IsOptional() @IsString() @Length(1, 128)
+  userId?: string; // Backend UUID (preferred) or legacy UID identifier
 
   @IsString()
   @Length(1, 36)

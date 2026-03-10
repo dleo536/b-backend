@@ -1,4 +1,4 @@
-import { Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
 import { CreateListDto } from "./dto/create-list.dto";
@@ -6,6 +6,7 @@ import { UpdateListDto } from "./dto/update-list.dto";
 import { AlbumList } from "./list.entity";
 import { User } from "../user/user.entity";
 import { UserFollow } from "../user/follow.entity";
+import { ListLike } from "./list-like.entity";
 
 @Injectable()
 export class ListService {
@@ -18,6 +19,8 @@ export class ListService {
         private userRepository: Repository<User>,
         @InjectRepository(UserFollow)
         private followRepository: Repository<UserFollow>,
+        @InjectRepository(ListLike)
+        private listLikeRepository: Repository<ListLike>,
     ) {}
 
     private isUuid(value: string): boolean {
@@ -37,6 +40,35 @@ export class ListService {
         }
 
         return this.userRepository.findOne({ where: { oauthId: identifier } });
+    }
+
+    private async requireUserByIdentifier(identifier: string, label: string): Promise<User> {
+        if (!identifier) {
+            throw new BadRequestException(`${label} identifier is required`);
+        }
+
+        const user = await this.findUserByIdentifier(identifier);
+        if (!user) {
+            throw new NotFoundException(`${label} not found`);
+        }
+
+        return user;
+    }
+
+    private resolveSystemListFlag(createListDto: CreateListDto): boolean {
+        if (typeof createListDto.isSystem === "boolean") {
+            return createListDto.isSystem;
+        }
+
+        const normalizedSlug = (createListDto.slug ?? "").toLowerCase();
+        const normalizedTitle = (createListDto.title ?? "").toLowerCase();
+
+        return (
+            normalizedSlug === "backlog" ||
+            normalizedSlug === "favorites" ||
+            normalizedTitle === "backlog" ||
+            normalizedTitle === "favorites"
+        );
     }
 
     private normalizeAlbumIds(albumIds?: string[]): string[] | undefined {
@@ -93,6 +125,7 @@ export class ListService {
             description: createListDto.description,
             visibility: createListDto.visibility,
             listType: createListDto.listType,
+            isSystem: this.resolveSystemListFlag(createListDto),
             ownerId: user.id, // Use User UUID for FK
             firebaseUid: createListDto.firebaseUid, // Store Firebase UID separately
             albumIds,
@@ -105,7 +138,7 @@ export class ListService {
     async findAll(userID?: string, offset: number = 0, limit: number = 10, viewerUid?: string) {
         let where: any = {};
         let linkedUserId: string | null = null;
-        let followFilterMode: "global" | "following" | "user" = "global";
+        let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
         if (userID) {
             followFilterMode = "user";
             if (this.isUuid(userID)) {
@@ -134,12 +167,45 @@ export class ListService {
                 );
 
                 if (followedIds.length > 0) {
-                    where = { ownerId: In(filteredOwnerIds) };
-                    followFilterMode = "following";
+                    const followedOnlyWhere = { ownerId: In(followedIds), isSystem: false };
+                    const followedOnlyCount = await this.listRepository.count({ where: followedOnlyWhere });
+
+                    this.logger.log(
+                        `[findAll] following-only totalCount=${followedOnlyCount} where=${JSON.stringify(followedOnlyWhere)}`,
+                    );
+
+                    if (followedOnlyCount > 0) {
+                        const filteredWhere = { ownerId: In(filteredOwnerIds), isSystem: false };
+                        const filteredTotalCount = await this.listRepository.count({ where: filteredWhere });
+                        const lists = await this.listRepository.find({
+                            where: filteredWhere,
+                            skip: offset,
+                            take: limit,
+                            order: {
+                                createdAt: 'DESC',
+                            },
+                        });
+                        const hasMore = offset + lists.length < filteredTotalCount;
+
+                        return {
+                            data: lists,
+                            hasMore,
+                            totalCount: filteredTotalCount,
+                            mode: "following",
+                        };
+                    }
+
+                    followFilterMode = "global-fallback";
+                    where = { isSystem: false };
+                } else {
+                    where = { isSystem: false };
                 }
             } else {
                 this.logger.warn(`[findAll] viewerUid=${viewerUid} could not be resolved to a user`);
+                where = { isSystem: false };
             }
+        } else {
+            where = { isSystem: false };
         }
 
         this.logger.log(
@@ -169,6 +235,7 @@ export class ListService {
             data: lists,
             hasMore,
             totalCount,
+            mode: followFilterMode,
         };
     }
 
@@ -203,6 +270,115 @@ export class ListService {
         }
 
         return list;
+    }
+
+    async likeList(listId: string, viewerIdentifier: string) {
+        const viewer = await this.requireUserByIdentifier(viewerIdentifier, "Viewer");
+        const list = await this.findOne(listId);
+
+        const existingLike = await this.listLikeRepository.findOne({
+            where: {
+                userId: viewer.id,
+                listId: list.id,
+            },
+        });
+
+        if (existingLike) {
+            return {
+                success: true,
+                liked: true,
+                listId: list.id,
+                userId: viewer.id,
+                likesCount: list.likesCount ?? 0,
+            };
+        }
+
+        const like = this.listLikeRepository.create({
+            userId: viewer.id,
+            listId: list.id,
+        });
+        await this.listLikeRepository.save(like);
+
+        list.likesCount = (list.likesCount ?? 0) + 1;
+        await this.listRepository.save(list);
+
+        return {
+            success: true,
+            liked: true,
+            listId: list.id,
+            userId: viewer.id,
+            likesCount: list.likesCount,
+        };
+    }
+
+    async unlikeList(listId: string, viewerIdentifier: string) {
+        const viewer = await this.requireUserByIdentifier(viewerIdentifier, "Viewer");
+        const list = await this.findOne(listId);
+
+        const existingLike = await this.listLikeRepository.findOne({
+            where: {
+                userId: viewer.id,
+                listId: list.id,
+            },
+        });
+
+        if (existingLike) {
+            await this.listLikeRepository.remove(existingLike);
+            list.likesCount = Math.max(0, (list.likesCount ?? 0) - 1);
+            await this.listRepository.save(list);
+        }
+
+        return {
+            success: true,
+            liked: false,
+            listId: list.id,
+            userId: viewer.id,
+            likesCount: list.likesCount ?? 0,
+        };
+    }
+
+    async isListLiked(listId: string, viewerIdentifier: string) {
+        const viewer = await this.requireUserByIdentifier(viewerIdentifier, "Viewer");
+        const list = await this.findOne(listId);
+
+        const existingLike = await this.listLikeRepository.findOne({
+            where: {
+                userId: viewer.id,
+                listId: list.id,
+            },
+        });
+
+        return {
+            liked: Boolean(existingLike),
+            listId: list.id,
+            userId: viewer.id,
+            likesCount: list.likesCount ?? 0,
+        };
+    }
+
+    async getLikedLists(viewerIdentifier: string, offset: number = 0, limit: number = 50) {
+        const viewer = await this.requireUserByIdentifier(viewerIdentifier, "Viewer");
+        const totalCount = await this.listLikeRepository.count({
+            where: { userId: viewer.id },
+        });
+
+        const likes = await this.listLikeRepository.find({
+            where: { userId: viewer.id },
+            relations: ["list"],
+            skip: offset,
+            take: limit,
+            order: { createdAt: "DESC" },
+        });
+
+        const likedLists = likes
+            .map((like) => like.list)
+            .filter((list): list is AlbumList => Boolean(list));
+
+        return {
+            data: likedLists,
+            hasMore: offset + likedLists.length < totalCount,
+            totalCount,
+        };
     }
 
     async update(id: string, updateListDto: UpdateListDto) {
