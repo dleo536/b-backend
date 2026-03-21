@@ -20,6 +20,8 @@ export class ListController {
         @Query('userId') userId?: string,
         @Query('viewerId') viewerId?: string,
         @Query('viewerUid') viewerUid?: string,
+        @Query('title') title?: string,
+        @Query('albumId') albumId?: string,
         @Query('offset') offset?: string,
         @Query('limit') limit?: string,
     ) {
@@ -28,9 +30,9 @@ export class ListController {
         const resolvedUserId = userID ?? userId;
         const viewerIdentifier = viewerId ?? viewerUid;
         this.logger.log(
-            `[GET /lists] userID=${resolvedUserId ?? "none"} viewer=${viewerIdentifier ?? "none"} offset=${offsetNum} limit=${limitNum}`,
+            `[GET /lists] userID=${resolvedUserId ?? "none"} viewer=${viewerIdentifier ?? "none"} title=${title ?? "none"} albumId=${albumId ?? "none"} offset=${offsetNum} limit=${limitNum}`,
         );
-        return this.listService.findAll(resolvedUserId, offsetNum, limitNum, viewerIdentifier);
+        return this.listService.findAll(resolvedUserId, offsetNum, limitNum, viewerIdentifier, title, albumId);
     }
 
     @Get('me/liked')

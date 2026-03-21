@@ -1,4 +1,4 @@
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, ConflictException } from "@nestjs/common";
 import { Test, TestingModule } from "@nestjs/testing";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
@@ -14,13 +14,13 @@ describe("UserService follow behavior", () => {
   let followRepository: MockRepository<UserFollow>;
 
   const currentUser = {
-    id: "11111111-1111-1111-1111-111111111111",
+    id: "11111111-1111-4111-8111-111111111111",
     followingCount: 0,
     followersCount: 0,
   };
 
   const targetUser = {
-    id: "22222222-2222-2222-2222-222222222222",
+    id: "22222222-2222-4222-8222-222222222222",
     followingCount: 0,
     followersCount: 0,
   };
@@ -138,5 +138,97 @@ describe("UserService follow behavior", () => {
     expect(result.following).toBe(true);
     expect(result.message).toBe("Already following user");
     expect(followRepository.save).not.toHaveBeenCalled();
+  });
+
+  it("create rejects a duplicate username", async () => {
+    (userRepository.findOne as jest.Mock).mockImplementation(({ where }) => {
+      if (where?.usernameLower === "takenname") {
+        return Promise.resolve({ id: "existing-user-1" });
+      }
+      return Promise.resolve(null);
+    });
+
+    await expect(
+      service.create({
+        username: "TakenName",
+        email: "unique@example.com",
+        firstName: "Taken",
+        lastName: "User",
+      } as any),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("create rejects a duplicate email", async () => {
+    (userRepository.findOne as jest.Mock).mockImplementation(({ where }) => {
+      if (where?.emailLower === "taken@example.com") {
+        return Promise.resolve({ id: "existing-user-2" });
+      }
+      return Promise.resolve(null);
+    });
+
+    await expect(
+      service.create({
+        username: "FreshName",
+        email: "taken@example.com",
+        firstName: "Fresh",
+        lastName: "User",
+      } as any),
+    ).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it("create rejects invalid email format", async () => {
+    await expect(
+      service.create({
+        username: "FreshName",
+        email: "not-an-email",
+        firstName: "Fresh",
+        lastName: "User",
+      } as any),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("checkAvailability reports existing username and email", async () => {
+    (userRepository.findOne as jest.Mock).mockImplementation(({ where }) => {
+      if (where?.usernameLower === "takenname") {
+        return Promise.resolve({ id: "existing-user-1" });
+      }
+      if (where?.emailLower === "taken@example.com") {
+        return Promise.resolve({ id: "existing-user-2" });
+      }
+      return Promise.resolve(null);
+    });
+
+    const result = await service.checkAvailability("TakenName", "taken@example.com");
+
+    expect(result).toEqual({
+      usernameAvailable: false,
+      emailAvailable: false,
+      usernameValid: true,
+      emailValid: true,
+    });
+  });
+
+  it("findOne resolves a Firebase oauthId without querying the uuid id column", async () => {
+    const firebaseUid = "1csj3ZcjHOcpn2a6o0qOqeAVvKo1";
+    (userRepository.findOne as jest.Mock).mockImplementation(({ where }) => {
+      if (where?.oauthId === firebaseUid) {
+        return Promise.resolve({
+          id: currentUser.id,
+          oauthId: firebaseUid,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const result = await service.findOne(firebaseUid);
+
+    expect(result).toEqual({
+      id: currentUser.id,
+      oauthId: firebaseUid,
+    });
+    expect(userRepository.findOne).toHaveBeenCalledTimes(1);
+    expect(userRepository.findOne).toHaveBeenCalledWith({
+      where: { oauthId: firebaseUid },
+    });
   });
 });

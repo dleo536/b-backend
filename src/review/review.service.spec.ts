@@ -117,6 +117,36 @@ describe("ReviewService", () => {
     expect(result.userId).toBe(backendUserId);
   });
 
+  it("create preserves spotifyAlbumId when provided", async () => {
+    const backendUserId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    (userRepository.findOne as jest.Mock).mockResolvedValue({
+      id: backendUserId,
+      oauthId: null,
+    });
+    (reviewRepository.findOne as jest.Mock).mockResolvedValue(null);
+    (reviewRepository.create as jest.Mock).mockImplementation((value) => value);
+    (reviewRepository.save as jest.Mock).mockImplementation(async (value) => ({
+      id: "review-spotify",
+      ...value,
+    }));
+
+    const result = await service.create({
+      userId: backendUserId,
+      releaseGroupMbId: "rg-spotify",
+      spotifyAlbumId: "spotify-album-1",
+      albumTitleSnapshot: "Album",
+      artistNameSnapshot: "Artist",
+    });
+
+    expect(reviewRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: backendUserId,
+        spotifyAlbumId: "spotify-album-1",
+      }),
+    );
+    expect(result.spotifyAlbumId).toBe("spotify-album-1");
+  });
+
   it("create throws when no user identifier is provided", async () => {
     await expect(
       service.create({
@@ -193,5 +223,35 @@ describe("ReviewService", () => {
       "11111111-1111-1111-1111-111111111111",
       "22222222-2222-2222-2222-222222222222",
     ]);
+  });
+
+  it("filters global reviews by spotify album id when provided", async () => {
+    (reviewRepository.count as jest.Mock).mockResolvedValue(1);
+    (reviewRepository.find as jest.Mock).mockResolvedValue([
+      { id: "album-review-1", spotifyAlbumId: "spotify-album-1" },
+    ]);
+
+    const result = await service.findAll(
+      undefined,
+      0,
+      10,
+      undefined,
+      "spotify-album-1",
+    );
+
+    expect(result).toEqual({
+      data: [{ id: "album-review-1", spotifyAlbumId: "spotify-album-1" }],
+      hasMore: false,
+      totalCount: 1,
+      mode: "global",
+    });
+    expect(reviewRepository.count).toHaveBeenCalledWith({
+      where: { spotifyAlbumId: "spotify-album-1" },
+    });
+    expect(reviewRepository.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { spotifyAlbumId: "spotify-album-1" },
+      }),
+    );
   });
 });

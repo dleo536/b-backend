@@ -39,6 +39,47 @@ export class ReviewService {
         return this.userRepository.findOne({ where: { oauthId: identifier } });
     }
 
+    private appendAlbumFilter(
+        where: any,
+        spotifyAlbumId?: string,
+        releaseGroupMbId?: string,
+    ) {
+        const normalizedSpotifyAlbumId = spotifyAlbumId?.trim();
+        const normalizedReleaseGroupMbId = releaseGroupMbId?.trim();
+
+        if (!normalizedSpotifyAlbumId && !normalizedReleaseGroupMbId) {
+            return where;
+        }
+
+        const baseConditions = Array.isArray(where) ? where : [where];
+        const nextConditions = baseConditions.flatMap((condition) => {
+            const normalizedCondition = condition ?? {};
+            const filters: any[] = [];
+
+            if (normalizedSpotifyAlbumId) {
+                filters.push({
+                    ...normalizedCondition,
+                    spotifyAlbumId: normalizedSpotifyAlbumId,
+                });
+            }
+
+            if (normalizedReleaseGroupMbId) {
+                filters.push({
+                    ...normalizedCondition,
+                    releaseGroupMbId: normalizedReleaseGroupMbId,
+                });
+            }
+
+            return filters;
+        });
+
+        if (nextConditions.length === 1) {
+            return nextConditions[0];
+        }
+
+        return nextConditions;
+    }
+
     async create(createReviewDto: CreateReviewDto) {
         const firebaseUid = createReviewDto.firebaseUid?.trim();
         const userId = createReviewDto.userId?.trim();
@@ -100,7 +141,14 @@ export class ReviewService {
         return result;
     }
 
-    async findAll(userID?: string, offset: number = 0, limit: number = 10, viewerUid?: string) {
+    async findAll(
+        userID?: string,
+        offset: number = 0,
+        limit: number = 10,
+        viewerUid?: string,
+        spotifyAlbumId?: string,
+        releaseGroupMbId?: string,
+    ) {
         // Build the query filter
         let where: any = {};
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
@@ -134,7 +182,11 @@ export class ReviewService {
                 );
 
                 if (followedIds.length > 0) {
-                    const followedOnlyWhere = { userId: In(followedIds) };
+                    const followedOnlyWhere = this.appendAlbumFilter(
+                        { userId: In(followedIds) },
+                        spotifyAlbumId,
+                        releaseGroupMbId,
+                    );
                     const followedOnlyCount = await this.reviewRepository.count({ where: followedOnlyWhere });
 
                     this.logger.log(
@@ -142,7 +194,11 @@ export class ReviewService {
                     );
 
                     if (followedOnlyCount > 0) {
-                        const filteredWhere = { userId: In(filteredUserIds) };
+                        const filteredWhere = this.appendAlbumFilter(
+                            { userId: In(filteredUserIds) },
+                            spotifyAlbumId,
+                            releaseGroupMbId,
+                        );
                         const filteredTotalCount = await this.reviewRepository.count({ where: filteredWhere });
                         const reviews = await this.reviewRepository.find({
                             where: filteredWhere,
@@ -169,8 +225,10 @@ export class ReviewService {
             }
         }
 
+        where = this.appendAlbumFilter(where, spotifyAlbumId, releaseGroupMbId);
+
         this.logger.log(
-            `[findAll] userID=${userID ?? "none"} viewerUid=${viewerUid ?? "none"} authUserId=${authUserId ?? "none"} mode=${followFilterMode} where=${JSON.stringify(where)} offset=${offset} limit=${limit}`,
+            `[findAll] userID=${userID ?? "none"} viewerUid=${viewerUid ?? "none"} authUserId=${authUserId ?? "none"} mode=${followFilterMode} spotifyAlbumId=${spotifyAlbumId ?? "none"} releaseGroupMbId=${releaseGroupMbId ?? "none"} where=${JSON.stringify(where)} offset=${offset} limit=${limit}`,
         );
 
         // Get the total count of matching reviews

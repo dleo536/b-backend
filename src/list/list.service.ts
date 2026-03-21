@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { ArrayContains, ILike, In, Repository } from "typeorm";
 import { CreateListDto } from "./dto/create-list.dto";
 import { UpdateListDto } from "./dto/update-list.dto";
 import { AlbumList } from "./list.entity";
@@ -86,6 +86,50 @@ export class ListService {
         );
     }
 
+    private appendTitleFilter(where: any, title?: string) {
+        const normalizedTitle = title?.trim();
+
+        if (!normalizedTitle) {
+            return where;
+        }
+
+        const titleFilter = ILike(`%${normalizedTitle}%`);
+
+        if (Array.isArray(where)) {
+            return where.map((condition) => ({
+                ...condition,
+                title: titleFilter,
+            }));
+        }
+
+        return {
+            ...where,
+            title: titleFilter,
+        };
+    }
+
+    private appendAlbumFilter(where: any, albumId?: string) {
+        const normalizedAlbumId = albumId?.trim();
+
+        if (!normalizedAlbumId) {
+            return where;
+        }
+
+        const albumFilter = ArrayContains([normalizedAlbumId]);
+
+        if (Array.isArray(where)) {
+            return where.map((condition) => ({
+                ...condition,
+                albumIds: albumFilter,
+            }));
+        }
+
+        return {
+            ...where,
+            albumIds: albumFilter,
+        };
+    }
+
     async create(createListDto: CreateListDto) {
         // Map Firebase UID to User UUID
         let user = await this.userRepository.findOne({
@@ -135,7 +179,14 @@ export class ListService {
         return result;
     }
 
-    async findAll(userID?: string, offset: number = 0, limit: number = 10, viewerUid?: string) {
+    async findAll(
+        userID?: string,
+        offset: number = 0,
+        limit: number = 10,
+        viewerUid?: string,
+        title?: string,
+        albumId?: string,
+    ) {
         let where: any = {};
         let linkedUserId: string | null = null;
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
@@ -162,12 +213,16 @@ export class ListService {
                 const followedIds = follows.map((follow) => follow.followingId);
                 const filteredOwnerIds = Array.from(new Set([...followedIds, viewerUser.id]));
 
-                this.logger.log(
-                    `[findAll] viewerUid=${viewerUid} authUserId=${viewerUser.id} followedCount=${followedIds.length}`,
-                );
+                    this.logger.log(
+                        `[findAll] viewerUid=${viewerUid} authUserId=${viewerUser.id} followedCount=${followedIds.length}`,
+                    );
 
                 if (followedIds.length > 0) {
-                    const followedOnlyWhere = { ownerId: In(followedIds), isSystem: false };
+                    let followedOnlyWhere = this.appendTitleFilter(
+                        { ownerId: In(followedIds), isSystem: false },
+                        title,
+                    );
+                    followedOnlyWhere = this.appendAlbumFilter(followedOnlyWhere, albumId);
                     const followedOnlyCount = await this.listRepository.count({ where: followedOnlyWhere });
 
                     this.logger.log(
@@ -175,7 +230,11 @@ export class ListService {
                     );
 
                     if (followedOnlyCount > 0) {
-                        const filteredWhere = { ownerId: In(filteredOwnerIds), isSystem: false };
+                        let filteredWhere = this.appendTitleFilter(
+                            { ownerId: In(filteredOwnerIds), isSystem: false },
+                            title,
+                        );
+                        filteredWhere = this.appendAlbumFilter(filteredWhere, albumId);
                         const filteredTotalCount = await this.listRepository.count({ where: filteredWhere });
                         const lists = await this.listRepository.find({
                             where: filteredWhere,
@@ -208,8 +267,11 @@ export class ListService {
             where = { isSystem: false };
         }
 
+        where = this.appendTitleFilter(where, title);
+        where = this.appendAlbumFilter(where, albumId);
+
         this.logger.log(
-            `[findAll] userID=${userID ?? "none"} viewerUid=${viewerUid ?? "none"} linkedUserId=${linkedUserId ?? "none"} mode=${followFilterMode} offset=${offset} limit=${limit} where=${JSON.stringify(where)}`,
+            `[findAll] userID=${userID ?? "none"} viewerUid=${viewerUid ?? "none"} linkedUserId=${linkedUserId ?? "none"} mode=${followFilterMode} title=${title ?? "none"} albumId=${albumId ?? "none"} offset=${offset} limit=${limit} where=${JSON.stringify(where)}`,
         );
 
         // Get the total count of matching documents

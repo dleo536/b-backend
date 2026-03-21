@@ -19,6 +19,9 @@ export class CreateReviewDto {
   @IsOptional() @IsString() @Length(1, 36)
   artistMbId?: string;
 
+  @IsOptional() @IsString() @Length(1, 64)
+  spotifyAlbumId?: string;
+
   @IsString() @Length(1, 512)
   albumTitleSnapshot: string;
 

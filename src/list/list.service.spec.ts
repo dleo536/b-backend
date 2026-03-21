@@ -163,6 +163,52 @@ describe("ListService", () => {
     ]);
   });
 
+  it("filters global lists by partial title when a title query is provided", async () => {
+    (listRepository.count as jest.Mock).mockResolvedValue(1);
+    (listRepository.find as jest.Mock).mockResolvedValue([{ id: "list-2025", title: "Best of 2025" }]);
+
+    const result = await service.findAll(undefined, 0, 10, undefined, "2025");
+
+    expect(result).toEqual({
+      data: [{ id: "list-2025", title: "Best of 2025" }],
+      hasMore: false,
+      totalCount: 1,
+      mode: "global",
+    });
+
+    const countCall = (listRepository.count as jest.Mock).mock.calls[0][0];
+    expect(countCall.where.isSystem).toBe(false);
+    expect(countCall.where.title?.value).toBe("%2025%");
+
+    const findCall = (listRepository.find as jest.Mock).mock.calls[0][0];
+    expect(findCall.where.isSystem).toBe(false);
+    expect(findCall.where.title?.value).toBe("%2025%");
+  });
+
+  it("filters global lists by album membership when an album id query is provided", async () => {
+    (listRepository.count as jest.Mock).mockResolvedValue(1);
+    (listRepository.find as jest.Mock).mockResolvedValue([
+      { id: "album-list-1", title: "Records with this album" },
+    ]);
+
+    const result = await service.findAll(undefined, 0, 10, undefined, undefined, "spotify-album-1");
+
+    expect(result).toEqual({
+      data: [{ id: "album-list-1", title: "Records with this album" }],
+      hasMore: false,
+      totalCount: 1,
+      mode: "global",
+    });
+
+    const countCall = (listRepository.count as jest.Mock).mock.calls[0][0];
+    expect(countCall.where.isSystem).toBe(false);
+    expect(countCall.where.albumIds?.value).toEqual(["spotify-album-1"]);
+
+    const findCall = (listRepository.find as jest.Mock).mock.calls[0][0];
+    expect(findCall.where.isSystem).toBe(false);
+    expect(findCall.where.albumIds?.value).toEqual(["spotify-album-1"]);
+  });
+
   it("likeList creates a like row and increments likesCount", async () => {
     const viewer = {
       id: "11111111-1111-1111-1111-111111111111",

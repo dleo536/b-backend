@@ -1,6 +1,12 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import {
+    BadRequestException,
+    ConflictException,
+    Injectable,
+    Logger,
+    NotFoundException,
+} from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, ILike } from "typeorm";
+import { Repository, ILike, QueryFailedError } from "typeorm";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { User } from "./user.entity";
@@ -9,6 +15,8 @@ import { UserFollow } from "./follow.entity";
 @Injectable()
 export class UserService {
     private readonly logger = new Logger(UserService.name);
+    private readonly emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+    private readonly usernameRegex = /^[A-Za-z0-9._]+$/;
 
     constructor(
         @InjectRepository(User)
@@ -17,20 +25,157 @@ export class UserService {
         private followRepository: Repository<UserFollow>,
     ) {}
 
+    private isUuid(value: string): boolean {
+        if (typeof value !== "string") {
+            return false;
+        }
+
+        return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+    }
+
+    private normalizeUsername(username?: string): string {
+        return typeof username === "string" ? username.trim() : "";
+    }
+
+    private normalizeEmail(email?: string): string | undefined {
+        if (typeof email !== "string") {
+            return undefined;
+        }
+
+        const normalizedEmail = email.trim().toLowerCase();
+        return normalizedEmail.length > 0 ? normalizedEmail : undefined;
+    }
+
+    private validateUsername(username: string) {
+        if (!username) {
+            throw new BadRequestException("Username is required");
+        }
+        if (username.length < 3) {
+            throw new BadRequestException("Username must be at least 3 characters long");
+        }
+        if (username.length > 24) {
+            throw new BadRequestException("Username must be 24 characters or fewer");
+        }
+        if (!this.usernameRegex.test(username)) {
+            throw new BadRequestException(
+                "Username can only contain letters, numbers, periods, and underscores",
+            );
+        }
+    }
+
+    private validateEmail(email?: string) {
+        if (!email) {
+            return;
+        }
+
+        if (!this.emailRegex.test(email)) {
+            throw new BadRequestException("Enter a valid email address");
+        }
+    }
+
+    private mapUniqueConstraintError(error: unknown): ConflictException | null {
+        if (!(error instanceof QueryFailedError)) {
+            return null;
+        }
+
+        const driverError = (error as QueryFailedError & { driverError?: { code?: string; detail?: string; constraint?: string } }).driverError;
+        if (driverError?.code !== "23505") {
+            return null;
+        }
+
+        const detail = `${driverError.detail || ""} ${driverError.constraint || ""}`.toLowerCase();
+        if (detail.includes("usernamelower")) {
+            return new ConflictException("Username is already taken");
+        }
+        if (detail.includes("emaillower")) {
+            return new ConflictException("Email is already in use");
+        }
+
+        return new ConflictException("A user with those details already exists");
+    }
+
+    async checkAvailability(username?: string, email?: string) {
+        const normalizedUsername = this.normalizeUsername(username);
+        const normalizedEmail = this.normalizeEmail(email);
+
+        const usernameValid = normalizedUsername.length === 0
+            ? null
+            : normalizedUsername.length >= 3 &&
+              normalizedUsername.length <= 24 &&
+              this.usernameRegex.test(normalizedUsername);
+
+        const emailValid = normalizedEmail === undefined
+            ? null
+            : this.emailRegex.test(normalizedEmail);
+
+        const usernameUser =
+            usernameValid && normalizedUsername
+                ? await this.userRepository.findOne({
+                      where: { usernameLower: normalizedUsername.toLowerCase() },
+                  })
+                : null;
+        const emailUser =
+            emailValid && normalizedEmail
+                ? await this.userRepository.findOne({
+                      where: { emailLower: normalizedEmail },
+                  })
+                : null;
+
+        return {
+            usernameAvailable:
+                usernameValid === null ? null : Boolean(usernameValid && !usernameUser),
+            emailAvailable: emailValid === null ? null : Boolean(emailValid && !emailUser),
+            usernameValid,
+            emailValid,
+        };
+    }
+
     async create(createUserDto: CreateUserDto) {
+        const normalizedUsername = this.normalizeUsername(createUserDto.username);
+        const normalizedEmail = this.normalizeEmail(createUserDto.email);
+        this.validateUsername(normalizedUsername);
+        this.validateEmail(normalizedEmail);
+
         const legacyUid = (createUserDto as any).uid;
         const oauthId =
             createUserDto.oauthId ??
             (typeof legacyUid === "string" && legacyUid.length > 0 ? legacyUid : undefined);
 
+        const existingUsername = await this.userRepository.findOne({
+            where: { usernameLower: normalizedUsername.toLowerCase() },
+        });
+        if (existingUsername) {
+            throw new ConflictException("Username is already taken");
+        }
+
+        if (normalizedEmail) {
+            const existingEmail = await this.userRepository.findOne({
+                where: { emailLower: normalizedEmail },
+            });
+            if (existingEmail) {
+                throw new ConflictException("Email is already in use");
+            }
+        }
+
         const user = this.userRepository.create({
             ...createUserDto,
-            usernameLower: createUserDto.username.toLowerCase(),
-            emailLower: createUserDto.email?.toLowerCase(),
+            username: normalizedUsername,
+            usernameLower: normalizedUsername.toLowerCase(),
+            email: normalizedEmail,
+            emailLower: normalizedEmail,
             oauthId,
         });
-        const result = await this.userRepository.save(user);
-        return result;
+
+        try {
+            const result = await this.userRepository.save(user);
+            return result;
+        } catch (error) {
+            const mappedError = this.mapUniqueConstraintError(error);
+            if (mappedError) {
+                throw mappedError;
+            }
+            throw error;
+        }
     }
 
     async findAll(page: number = 0, usersPerPage: number = 4, username?: string) {
@@ -57,17 +202,21 @@ export class UserService {
         return users;
     }
 
-    async findByOauthId(oauthId: string) {
+    async findByOauthId(oauthId: string): Promise<User | null> {
         const user = await this.userRepository.findOne({
             where: { oauthId },
         });
         return user;
     }
 
-    async findOne(identifier: string) {
-        let user = await this.userRepository.findOne({
-            where: { id: identifier },
-        });
+    async findOne(identifier: string): Promise<User> {
+        let user: User | null = null;
+
+        if (this.isUuid(identifier)) {
+            user = await this.userRepository.findOne({
+                where: { id: identifier },
+            });
+        }
 
         if (!user) {
             user = await this.userRepository.findOne({
@@ -99,7 +248,10 @@ export class UserService {
         
         // Update usernameLower if username is being updated
         if (updateUserDto.username) {
-            updateUserDto['usernameLower'] = updateUserDto.username.toLowerCase();
+            const normalizedUsername = this.normalizeUsername(updateUserDto.username);
+            this.validateUsername(normalizedUsername);
+            updateUserDto.username = normalizedUsername;
+            updateUserDto['usernameLower'] = normalizedUsername.toLowerCase();
         }
 
         Object.assign(user, updateUserDto);

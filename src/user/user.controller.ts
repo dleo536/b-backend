@@ -12,6 +12,14 @@ export class UserController {
         return this.userService.create(createUserDto);
     }
 
+    @Get('availability')
+    checkAvailability(
+        @Query('username') username?: string,
+        @Query('email') email?: string,
+    ) {
+        return this.userService.checkAvailability(username, email);
+    }
+
     @Get()
     findAll(
         @Query('p') page?: string,

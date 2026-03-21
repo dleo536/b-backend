@@ -18,6 +18,8 @@ export class ReviewController {
         @Query('userId') userId?: string,
         @Query('viewerId') viewerId?: string,
         @Query('viewerUid') viewerUid?: string,
+        @Query('spotifyAlbumId') spotifyAlbumId?: string,
+        @Query('releaseGroupMbId') releaseGroupMbId?: string,
         @Query('offset') offset?: string,
         @Query('limit') limit?: string,
     ) {
@@ -28,6 +30,8 @@ export class ReviewController {
             offsetNum,
             limitNum,
             viewerId ?? viewerUid,
+            spotifyAlbumId,
+            releaseGroupMbId,
         );
     }
 
