@@ -110,9 +110,25 @@ export class ReviewService {
         }
 
         const review = this.reviewRepository.create({
-            ...createReviewDto,
             userId: user.id,
             firebaseUid: currentUserOauthId,
+            releaseGroupMbId: createReviewDto.releaseGroupMbId,
+            releaseMbId: createReviewDto.releaseMbId,
+            artistMbId: createReviewDto.artistMbId,
+            spotifyAlbumId: createReviewDto.spotifyAlbumId,
+            albumTitleSnapshot: createReviewDto.albumTitleSnapshot,
+            artistNameSnapshot: createReviewDto.artistNameSnapshot,
+            coverUrlSnapshot: createReviewDto.coverUrlSnapshot,
+            ratingHalfSteps: createReviewDto.ratingHalfSteps,
+            headline: createReviewDto.headline,
+            body: createReviewDto.body,
+            isSpoiler: createReviewDto.isSpoiler ?? false,
+            isDraft: createReviewDto.isDraft ?? false,
+            visibility: createReviewDto.visibility,
+            listenedOn: createReviewDto.listenedOn,
+            relistenCount: createReviewDto.relistenCount ?? 0,
+            trackHighlights: createReviewDto.trackHighlights,
+            tags: createReviewDto.tags ?? [],
         });
         const result = await this.reviewRepository.save(review);
         return result;
@@ -239,7 +255,38 @@ export class ReviewService {
 
     async update(id: string, updateReviewDto: UpdateReviewDto, currentUserOauthId: string) {
         const review = await this.requireReviewAuthor(id, currentUserOauthId);
-        Object.assign(review, updateReviewDto);
+
+        if (updateReviewDto.ratingHalfSteps !== undefined) {
+            review.ratingHalfSteps = updateReviewDto.ratingHalfSteps;
+        }
+        if (updateReviewDto.headline !== undefined) {
+            review.headline = updateReviewDto.headline;
+        }
+        if (updateReviewDto.body !== undefined) {
+            review.body = updateReviewDto.body;
+        }
+        if (updateReviewDto.isSpoiler !== undefined) {
+            review.isSpoiler = updateReviewDto.isSpoiler;
+        }
+        if (updateReviewDto.isDraft !== undefined) {
+            review.isDraft = updateReviewDto.isDraft;
+        }
+        if (updateReviewDto.visibility !== undefined) {
+            review.visibility = updateReviewDto.visibility;
+        }
+        if (updateReviewDto.listenedOn !== undefined) {
+            review.listenedOn = updateReviewDto.listenedOn;
+        }
+        if (updateReviewDto.relistenCount !== undefined) {
+            review.relistenCount = updateReviewDto.relistenCount;
+        }
+        if (updateReviewDto.trackHighlights !== undefined) {
+            review.trackHighlights = updateReviewDto.trackHighlights;
+        }
+        if (updateReviewDto.tags !== undefined) {
+            review.tags = updateReviewDto.tags;
+        }
+
         const result = await this.reviewRepository.save(review);
         return result;
     }

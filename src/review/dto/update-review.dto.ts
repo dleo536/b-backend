@@ -1,4 +1,5 @@
 // src/reviews/dto/update-review.dto.ts
+import { Type } from 'class-transformer';
 import {
   IsArray, IsBoolean, IsDateString, IsEnum, IsInt,
   IsString, Length, Max, Min, ValidateNested, ArrayMaxSize,
@@ -6,23 +7,7 @@ import {
   IsIn,
 } from 'class-validator';
 import { ReviewVisibility } from '../review.entity';
-
-class TrackHighlightDto {
-  @IsOptional() @IsString() @Length(1, 64)
-  trackMbId?: string;
-
-  @IsOptional() @IsString() @Length(1, 256)
-  title?: string;
-
-  @IsOptional() @IsBoolean()
-  favorite?: boolean;
-
-  @IsOptional() @IsInt() @Min(1) @Max(10)
-  ratingHalfSteps?: number;
-
-  @IsOptional() @IsString() @Length(1, 5000)
-  comment?: string;
-}
+import { TrackHighlightDto } from './track-highlight.dto';
 
 export class UpdateReviewDto {
   @IsOptional() @IsInt() @Min(1) @Max(10)
@@ -51,8 +36,10 @@ export class UpdateReviewDto {
 
   @IsOptional() @IsArray() @ArrayMaxSize(100)
   @ValidateNested({ each: true })
+  @Type(() => TrackHighlightDto)
   trackHighlights?: TrackHighlightDto[];
 
-  @IsOptional() @IsArray()
+  @IsOptional() @IsArray() @ArrayMaxSize(50)
+  @IsString({ each: true }) @Length(1, 64, { each: true })
   tags?: string[];
 }

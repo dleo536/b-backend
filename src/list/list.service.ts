@@ -56,10 +56,6 @@ export class ListService {
     }
 
     private resolveSystemListFlag(createListDto: CreateListDto): boolean {
-        if (typeof createListDto.isSystem === "boolean") {
-            return createListDto.isSystem;
-        }
-
         const normalizedSlug = (createListDto.slug ?? "").toLowerCase();
         const normalizedTitle = (createListDto.title ?? "").toLowerCase();
 
@@ -418,6 +414,9 @@ export class ListService {
 
         if (updateListDto.title !== undefined) {
             list.title = updateListDto.title;
+        }
+        if (updateListDto.slug !== undefined) {
+            list.slug = updateListDto.slug;
         }
         if (updateListDto.description !== undefined) {
             list.description = updateListDto.description;

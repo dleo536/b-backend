@@ -1,39 +1,37 @@
-import { IsEmail, IsEnum, IsIn, IsNotEmpty, IsOptional, IsString, IsUrl } from "class-validator";
-import { AuthProvider } from "../user.entity";
+import { IsEmail, IsNotEmpty, IsOptional, IsString, IsUrl, Length, MaxLength } from "class-validator";
 export class CreateUserDto {
 
     @IsOptional() @IsEmail()
     email?: string;
 
-
-    @IsOptional() @IsIn(Object.values(AuthProvider))
-    authProvider?: AuthProvider;
-
     @IsString()
     @IsNotEmpty()
+    @Length(3, 24)
     username: string;
 
-    @IsOptional() @IsString()
+    @IsOptional() @IsString() @MaxLength(500)
     bio?: string;
 
     @IsOptional() @IsUrl()
     avatarUrl?: string;
 
-    @IsOptional() @IsString()
+    @IsOptional() @IsUrl()
     bannerUrl?: string;
 
-    @IsOptional() @IsString()
+    @IsOptional() @IsString() @MaxLength(120)
     location?: string;
 
-    @IsOptional() @IsString()
+    @IsOptional() @IsUrl()
     websiteUrl?: string;
 
 
     @IsString()
     @IsNotEmpty()
+    @Length(1, 80)
     firstName: string;
 
     @IsString()
     @IsNotEmpty()
+    @Length(1, 80)
     lastName: string;
 }

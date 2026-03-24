@@ -1,6 +1,8 @@
 // src/reviews/dto/create-review.dto.ts
-import { IsBoolean, IsDateString, IsEnum, IsIn, IsInt, IsNotEmpty, IsOptional, IsString, Length, Max, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsOptional, IsString, IsUrl, Length, Max, Min, ValidateNested } from 'class-validator';
 import { ReviewVisibility } from '../review.entity';
+import { TrackHighlightDto } from './track-highlight.dto';
 
 export class CreateReviewDto {
   @IsString()
@@ -22,7 +24,7 @@ export class CreateReviewDto {
   @IsString() @Length(1, 512)
   artistNameSnapshot: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsUrl()
   coverUrlSnapshot?: string;
 
   @IsOptional() @IsInt() @Min(1) @Max(10)
@@ -50,9 +52,12 @@ export class CreateReviewDto {
   @IsOptional() @IsInt() @Min(0)
   relistenCount?: number;
 
-  @IsOptional()
-  trackHighlights?: Array<{ trackMbId?: string; title?: string; favorite?: boolean; ratingHalfSteps?: number; comment?: string }>;
+  @IsOptional() @IsArray() @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => TrackHighlightDto)
+  trackHighlights?: TrackHighlightDto[];
 
-  @IsOptional()
+  @IsOptional() @IsArray() @ArrayMaxSize(50)
+  @IsString({ each: true }) @Length(1, 64, { each: true })
   tags?: string[];
 }

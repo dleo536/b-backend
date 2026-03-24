@@ -173,7 +173,6 @@ export class UserService {
             usernameLower: normalizedUsername.toLowerCase(),
             email: normalizedEmail,
             emailLower: normalizedEmail,
-            authProvider: createUserDto.authProvider,
             oauthId,
             displayName: displayName || undefined,
             bio: createUserDto.bio,
@@ -278,19 +277,48 @@ export class UserService {
         const currentUser = await this.findByOauthIdOrThrow(currentUserOauthId);
         const user = await this.findOne(identifier);
         this.ensureCanManageUser(currentUser, user);
+        let normalizedUsername: string | undefined;
         
         // Update usernameLower if username is being updated
         if (updateUserDto.username) {
-            const normalizedUsername = this.normalizeUsername(updateUserDto.username);
+            normalizedUsername = this.normalizeUsername(updateUserDto.username);
             this.validateUsername(normalizedUsername);
             updateUserDto.username = normalizedUsername;
-            updateUserDto['usernameLower'] = normalizedUsername.toLowerCase();
         }
 
-        Object.assign(user, updateUserDto);
-        const result = await this.userRepository.save(user);
-        
-        return { message: 'User updated successfully', user: result };
+        if (updateUserDto.username !== undefined) {
+            user.username = updateUserDto.username;
+            user.usernameLower = normalizedUsername?.toLowerCase() ?? user.usernameLower;
+        }
+        if (updateUserDto.displayName !== undefined) {
+            user.displayName = updateUserDto.displayName;
+        }
+        if (updateUserDto.bio !== undefined) {
+            user.bio = updateUserDto.bio;
+        }
+        if (updateUserDto.avatarUrl !== undefined) {
+            user.avatarUrl = updateUserDto.avatarUrl;
+        }
+        if (updateUserDto.bannerUrl !== undefined) {
+            user.bannerUrl = updateUserDto.bannerUrl;
+        }
+        if (updateUserDto.location !== undefined) {
+            user.location = updateUserDto.location;
+        }
+        if (updateUserDto.websiteUrl !== undefined) {
+            user.websiteUrl = updateUserDto.websiteUrl;
+        }
+
+        try {
+            const result = await this.userRepository.save(user);
+            return { message: 'User updated successfully', user: result };
+        } catch (error) {
+            const mappedError = this.mapUniqueConstraintError(error);
+            if (mappedError) {
+                throw mappedError;
+            }
+            throw error;
+        }
     }
 
     async removeCurrentUser(currentUserOauthId: string) {
