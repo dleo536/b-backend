@@ -55,7 +55,7 @@ describe("ReviewService", () => {
     service = module.get<ReviewService>(ReviewService);
   });
 
-  it("create uses firebaseUid to resolve user and stores mapped userId", async () => {
+  it("create uses the authenticated firebase uid to resolve the user and stores mapped userId", async () => {
     (userRepository.findOne as jest.Mock).mockResolvedValue({
       id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
       oauthId: "firebase-uid-1",
@@ -68,11 +68,10 @@ describe("ReviewService", () => {
     }));
 
     const result = await service.create({
-      firebaseUid: "firebase-uid-1",
       releaseGroupMbId: "rg-1",
       albumTitleSnapshot: "Album",
       artistNameSnapshot: "Artist",
-    });
+    }, "firebase-uid-1");
 
     expect(userRepository.findOne).toHaveBeenCalledWith({
       where: { oauthId: "firebase-uid-1" },
@@ -86,42 +85,11 @@ describe("ReviewService", () => {
     expect(result.userId).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   });
 
-  it("create uses backend uuid when provided via userId", async () => {
-    const backendUserId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
-    (userRepository.findOne as jest.Mock).mockResolvedValue({
-      id: backendUserId,
-      oauthId: null,
-    });
-    (reviewRepository.findOne as jest.Mock).mockResolvedValue(null);
-    (reviewRepository.create as jest.Mock).mockImplementation((value) => value);
-    (reviewRepository.save as jest.Mock).mockImplementation(async (value) => ({
-      id: "review-2",
-      ...value,
-    }));
-
-    const result = await service.create({
-      userId: backendUserId,
-      releaseGroupMbId: "rg-2",
-      albumTitleSnapshot: "Album 2",
-      artistNameSnapshot: "Artist 2",
-    });
-
-    expect(userRepository.findOne).toHaveBeenCalledWith({
-      where: { id: backendUserId },
-    });
-    expect(reviewRepository.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        userId: backendUserId,
-      }),
-    );
-    expect(result.userId).toBe(backendUserId);
-  });
-
   it("create preserves spotifyAlbumId when provided", async () => {
     const backendUserId = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
     (userRepository.findOne as jest.Mock).mockResolvedValue({
       id: backendUserId,
-      oauthId: null,
+      oauthId: "firebase-uid-2",
     });
     (reviewRepository.findOne as jest.Mock).mockResolvedValue(null);
     (reviewRepository.create as jest.Mock).mockImplementation((value) => value);
@@ -131,12 +99,11 @@ describe("ReviewService", () => {
     }));
 
     const result = await service.create({
-      userId: backendUserId,
       releaseGroupMbId: "rg-spotify",
       spotifyAlbumId: "spotify-album-1",
       albumTitleSnapshot: "Album",
       artistNameSnapshot: "Artist",
-    });
+    }, "firebase-uid-2");
 
     expect(reviewRepository.save).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -153,7 +120,7 @@ describe("ReviewService", () => {
         releaseGroupMbId: "rg-3",
         albumTitleSnapshot: "Album 3",
         artistNameSnapshot: "Artist 3",
-      }),
+      }, ""),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 

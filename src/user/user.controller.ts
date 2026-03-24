@@ -1,4 +1,7 @@
-import { Controller, Post, Body, Get, Param, Patch, Delete, Query } from "@nestjs/common";
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
+import { CurrentUser } from "../auth/current-user.decorator";
+import { FirebaseAuthGuard } from "../auth/firebase-auth.guard";
+import type { AuthenticatedUser } from "../auth/auth-user.interface";
 import { UserService } from "./user.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
@@ -7,9 +10,13 @@ import { UpdateUserDto } from "./dto/update-user.dto";
 export class UserController {
     constructor(private readonly userService: UserService) {}
 
+    @UseGuards(FirebaseAuthGuard)
     @Post()
-    create(@Body() createUserDto: CreateUserDto) {
-        return this.userService.create(createUserDto);
+    create(
+        @Body() createUserDto: CreateUserDto,
+        @CurrentUser() currentUser: AuthenticatedUser,
+    ) {
+        return this.userService.create(createUserDto, currentUser.uid);
     }
 
     @Get('availability')
@@ -45,30 +52,34 @@ export class UserController {
         return this.userService.findAll(pageNum, usersPerPage, username);
     }
 
+    @UseGuards(FirebaseAuthGuard)
+    @Get("me")
+    getMe(@CurrentUser() currentUser: AuthenticatedUser) {
+        return this.userService.findByOauthIdOrThrow(currentUser.uid);
+    }
+
+    @UseGuards(FirebaseAuthGuard)
     @Post(':id/follow')
     followUser(
         @Param('id') id: string,
-        @Query('viewerId') viewerId?: string,
-        @Query('viewerUid') viewerUid?: string,
+        @CurrentUser() currentUser: AuthenticatedUser,
     ) {
-        return this.userService.followUser(viewerId ?? viewerUid ?? '', id);
+        return this.userService.followUser(currentUser.uid, id);
     }
 
+    @UseGuards(FirebaseAuthGuard)
     @Delete(':id/follow')
     unfollowUser(
         @Param('id') id: string,
-        @Query('viewerId') viewerId?: string,
-        @Query('viewerUid') viewerUid?: string,
+        @CurrentUser() currentUser: AuthenticatedUser,
     ) {
-        return this.userService.unfollowUser(viewerId ?? viewerUid ?? '', id);
+        return this.userService.unfollowUser(currentUser.uid, id);
     }
 
+    @UseGuards(FirebaseAuthGuard)
     @Get('me/following')
-    getMyFollowing(
-        @Query('viewerId') viewerId?: string,
-        @Query('viewerUid') viewerUid?: string,
-    ) {
-        return this.userService.getFollowingByIdentifier(viewerId ?? viewerUid ?? '');
+    getMyFollowing(@CurrentUser() currentUser: AuthenticatedUser) {
+        return this.userService.getFollowingByIdentifier(currentUser.uid);
     }
 
     @Get(':id/following')
@@ -76,13 +87,13 @@ export class UserController {
         return this.userService.getFollowingByIdentifier(id);
     }
 
+    @UseGuards(FirebaseAuthGuard)
     @Get(':id/is-following')
     isFollowing(
         @Param('id') id: string,
-        @Query('viewerId') viewerId?: string,
-        @Query('viewerUid') viewerUid?: string,
+        @CurrentUser() currentUser: AuthenticatedUser,
     ) {
-        return this.userService.isFollowing(viewerId ?? viewerUid ?? '', id);
+        return this.userService.isFollowing(currentUser.uid, id);
     }
 
     @Get(':id')
@@ -90,13 +101,37 @@ export class UserController {
         return this.userService.findOne(id);
     }
 
-    @Patch(':uid')
-    update(@Param('uid') uid: string, @Body() updateUserDto: UpdateUserDto) {
-        return this.userService.update(uid, updateUserDto);
+    @UseGuards(FirebaseAuthGuard)
+    @Patch('me')
+    updateMe(
+        @CurrentUser() currentUser: AuthenticatedUser,
+        @Body() updateUserDto: UpdateUserDto,
+    ) {
+        return this.userService.updateCurrentUser(currentUser.uid, updateUserDto);
     }
 
+    @UseGuards(FirebaseAuthGuard)
+    @Patch(':uid')
+    update(
+        @Param('uid') uid: string,
+        @Body() updateUserDto: UpdateUserDto,
+        @CurrentUser() currentUser: AuthenticatedUser,
+    ) {
+        return this.userService.update(uid, updateUserDto, currentUser.uid);
+    }
+
+    @UseGuards(FirebaseAuthGuard)
+    @Delete("me")
+    removeMe(@CurrentUser() currentUser: AuthenticatedUser) {
+        return this.userService.removeCurrentUser(currentUser.uid);
+    }
+
+    @UseGuards(FirebaseAuthGuard)
     @Delete(':id')
-    remove(@Param('id') id: string) {
-        return this.userService.remove(id);
+    remove(
+        @Param('id') id: string,
+        @CurrentUser() currentUser: AuthenticatedUser,
+    ) {
+        return this.userService.remove(id, currentUser.uid);
     }
 }

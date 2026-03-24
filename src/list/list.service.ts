@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { ArrayContains, ILike, In, Repository } from "typeorm";
 import { CreateListDto } from "./dto/create-list.dto";
@@ -130,35 +130,8 @@ export class ListService {
         };
     }
 
-    async create(createListDto: CreateListDto) {
-        // Map Firebase UID to User UUID
-        let user = await this.userRepository.findOne({
-            where: { oauthId: createListDto.firebaseUid },
-        });
-
-        // Fallback if caller already resolved backend ownerId (UUID)
-        if (!user && createListDto.ownerId && this.isUuid(createListDto.ownerId)) {
-            user = await this.userRepository.findOne({
-                where: { id: createListDto.ownerId },
-            });
-        }
-
-        // Fallback for environments where a UUID is being passed directly.
-        if (!user && this.isUuid(createListDto.firebaseUid)) {
-            user = await this.userRepository.findOne({
-                where: { id: createListDto.firebaseUid },
-            });
-        }
-
-        if (!user) {
-            throw new NotFoundException(`User with Firebase UID ${createListDto.firebaseUid} not found`);
-        }
-
-        // Self-heal older users created before oauthId was populated.
-        if (!user.oauthId && createListDto.firebaseUid) {
-            user.oauthId = createListDto.firebaseUid;
-            await this.userRepository.save(user);
-        }
+    async create(createListDto: CreateListDto, currentUserOauthId: string) {
+        const user = await this.requireUserByIdentifier(currentUserOauthId, "Authenticated user");
 
         const albumIds =
             this.normalizeAlbumIds(createListDto.albumIds ?? createListDto.albumList) ?? [];
@@ -170,8 +143,8 @@ export class ListService {
             visibility: createListDto.visibility,
             listType: createListDto.listType,
             isSystem: this.resolveSystemListFlag(createListDto),
-            ownerId: user.id, // Use User UUID for FK
-            firebaseUid: createListDto.firebaseUid, // Store Firebase UID separately
+            ownerId: user.id,
+            firebaseUid: currentUserOauthId,
             albumIds,
             itemsCount: albumIds.length,
         });
@@ -187,6 +160,7 @@ export class ListService {
         title?: string,
         albumId?: string,
     ) {
+        // TODO(authz): enforce list visibility rules on read paths beyond the current public feed behavior.
         let where: any = {};
         let linkedUserId: string | null = null;
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
@@ -213,10 +187,6 @@ export class ListService {
                 const followedIds = follows.map((follow) => follow.followingId);
                 const filteredOwnerIds = Array.from(new Set([...followedIds, viewerUser.id]));
 
-                    this.logger.log(
-                        `[findAll] viewerUid=${viewerUid} authUserId=${viewerUser.id} followedCount=${followedIds.length}`,
-                    );
-
                 if (followedIds.length > 0) {
                     let followedOnlyWhere = this.appendTitleFilter(
                         { ownerId: In(followedIds), isSystem: false },
@@ -224,10 +194,6 @@ export class ListService {
                     );
                     followedOnlyWhere = this.appendAlbumFilter(followedOnlyWhere, albumId);
                     const followedOnlyCount = await this.listRepository.count({ where: followedOnlyWhere });
-
-                    this.logger.log(
-                        `[findAll] following-only totalCount=${followedOnlyCount} where=${JSON.stringify(followedOnlyWhere)}`,
-                    );
 
                     if (followedOnlyCount > 0) {
                         let filteredWhere = this.appendTitleFilter(
@@ -260,7 +226,7 @@ export class ListService {
                     where = { isSystem: false };
                 }
             } else {
-                this.logger.warn(`[findAll] viewerUid=${viewerUid} could not be resolved to a user`);
+                this.logger.warn("[findAll] viewer token could not be resolved to a user profile");
                 where = { isSystem: false };
             }
         } else {
@@ -271,7 +237,7 @@ export class ListService {
         where = this.appendAlbumFilter(where, albumId);
 
         this.logger.log(
-            `[findAll] userID=${userID ?? "none"} viewerUid=${viewerUid ?? "none"} linkedUserId=${linkedUserId ?? "none"} mode=${followFilterMode} title=${title ?? "none"} albumId=${albumId ?? "none"} offset=${offset} limit=${limit} where=${JSON.stringify(where)}`,
+            `[findAll] userID=${userID ?? "none"} linkedUserId=${linkedUserId ?? "none"} mode=${followFilterMode} title=${title ?? "none"} albumId=${albumId ?? "none"} offset=${offset} limit=${limit} where=${JSON.stringify(where)}`,
         );
 
         // Get the total count of matching documents
@@ -323,6 +289,7 @@ export class ListService {
     }
 
     async findOne(id: string) {
+        // TODO(authz): enforce list visibility rules for direct list lookups.
         const list = await this.listRepository.findOne({
             where: { id },
         });
@@ -443,8 +410,8 @@ export class ListService {
         };
     }
 
-    async update(id: string, updateListDto: UpdateListDto) {
-        const list = await this.findOne(id);
+    async update(id: string, updateListDto: UpdateListDto, currentUserOauthId: string) {
+        const list = await this.requireListOwner(id, currentUserOauthId);
         const normalizedAlbumIds = this.normalizeAlbumIds(
             updateListDto.albumIds ?? updateListDto.albumList,
         );
@@ -470,9 +437,21 @@ export class ListService {
         return result;
     }
 
-    async remove(id: string) {
-        const list = await this.findOne(id);
+    async remove(id: string, currentUserOauthId: string) {
+        const list = await this.requireListOwner(id, currentUserOauthId);
         const result = await this.listRepository.remove(list);
         return result;
+    }
+
+    private async requireListOwner(listId: string, currentUserOauthId: string): Promise<AlbumList> {
+        const currentUser = await this.requireUserByIdentifier(currentUserOauthId, "Authenticated user");
+        const list = await this.findOne(listId);
+
+        if (list.ownerId !== currentUser.id) {
+            // TODO(authz): allow admin/mod list management and collaborative editor permissions.
+            throw new ForbiddenException("You can only modify your own lists");
+        }
+
+        return list;
     }
 }

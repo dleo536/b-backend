@@ -1,8 +1,8 @@
 import {
     BadRequestException,
     ConflictException,
+    ForbiddenException,
     Injectable,
-    Logger,
     NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
@@ -14,7 +14,6 @@ import { UserFollow } from "./follow.entity";
 
 @Injectable()
 export class UserService {
-    private readonly logger = new Logger(UserService.name);
     private readonly emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
     private readonly usernameRegex = /^[A-Za-z0-9._]+$/;
 
@@ -90,6 +89,9 @@ export class UserService {
         if (detail.includes("emaillower")) {
             return new ConflictException("Email is already in use");
         }
+        if (detail.includes("oauthid")) {
+            return new ConflictException("A profile already exists for this Firebase account");
+        }
 
         return new ConflictException("A user with those details already exists");
     }
@@ -130,16 +132,20 @@ export class UserService {
         };
     }
 
-    async create(createUserDto: CreateUserDto) {
+    async create(createUserDto: CreateUserDto, oauthId: string) {
+        if (!oauthId) {
+            throw new BadRequestException("Authenticated Firebase uid is required");
+        }
+
         const normalizedUsername = this.normalizeUsername(createUserDto.username);
         const normalizedEmail = this.normalizeEmail(createUserDto.email);
         this.validateUsername(normalizedUsername);
         this.validateEmail(normalizedEmail);
 
-        const legacyUid = (createUserDto as any).uid;
-        const oauthId =
-            createUserDto.oauthId ??
-            (typeof legacyUid === "string" && legacyUid.length > 0 ? legacyUid : undefined);
+        const existingOauthUser = await this.findByOauthId(oauthId);
+        if (existingOauthUser) {
+            return existingOauthUser;
+        }
 
         const existingUsername = await this.userRepository.findOne({
             where: { usernameLower: normalizedUsername.toLowerCase() },
@@ -157,13 +163,24 @@ export class UserService {
             }
         }
 
+        const displayName = [createUserDto.firstName, createUserDto.lastName]
+            .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+            .join(" ")
+            .trim();
+
         const user = this.userRepository.create({
-            ...createUserDto,
             username: normalizedUsername,
             usernameLower: normalizedUsername.toLowerCase(),
             email: normalizedEmail,
             emailLower: normalizedEmail,
+            authProvider: createUserDto.authProvider,
             oauthId,
+            displayName: displayName || undefined,
+            bio: createUserDto.bio,
+            avatarUrl: createUserDto.avatarUrl,
+            bannerUrl: createUserDto.bannerUrl,
+            location: createUserDto.location,
+            websiteUrl: createUserDto.websiteUrl,
         });
 
         try {
@@ -209,7 +226,17 @@ export class UserService {
         return user;
     }
 
+    async findByOauthIdOrThrow(oauthId: string): Promise<User> {
+        const user = await this.findByOauthId(oauthId);
+        if (!user) {
+            throw new NotFoundException("Authenticated user profile not found");
+        }
+
+        return user;
+    }
+
     async findOne(identifier: string): Promise<User> {
+        // TODO(authz): enforce profileVisibility rules for non-public profiles on read paths.
         let user: User | null = null;
 
         if (this.isUuid(identifier)) {
@@ -243,8 +270,14 @@ export class UserService {
         return users;
     }
 
-    async update(identifier: string, updateUserDto: UpdateUserDto) {
+    async updateCurrentUser(currentUserOauthId: string, updateUserDto: UpdateUserDto) {
+        return this.update(currentUserOauthId, updateUserDto, currentUserOauthId);
+    }
+
+    async update(identifier: string, updateUserDto: UpdateUserDto, currentUserOauthId: string) {
+        const currentUser = await this.findByOauthIdOrThrow(currentUserOauthId);
         const user = await this.findOne(identifier);
+        this.ensureCanManageUser(currentUser, user);
         
         // Update usernameLower if username is being updated
         if (updateUserDto.username) {
@@ -260,8 +293,15 @@ export class UserService {
         return { message: 'User updated successfully', user: result };
     }
 
-    async remove(identifier: string) {
+    async removeCurrentUser(currentUserOauthId: string) {
+        const currentUser = await this.findByOauthIdOrThrow(currentUserOauthId);
+        return this.userRepository.remove(currentUser);
+    }
+
+    async remove(identifier: string, currentUserOauthId: string) {
+        const currentUser = await this.findByOauthIdOrThrow(currentUserOauthId);
         const user = await this.findOne(identifier);
+        this.ensureCanManageUser(currentUser, user);
         const result = await this.userRepository.remove(user);
         return result;
     }
@@ -287,10 +327,6 @@ export class UserService {
                 followingId: targetUser.id,
             },
         });
-
-        this.logger.log(
-            `[followUser] authUserId=${currentUser.id} targetId=${targetUser.id} followExists=${Boolean(existingFollow)}`,
-        );
 
         if (existingFollow) {
             return {
@@ -343,10 +379,6 @@ export class UserService {
             },
         });
 
-        this.logger.log(
-            `[unfollowUser] authUserId=${currentUser.id} targetId=${targetUser.id} followExists=${Boolean(existingFollow)}`,
-        );
-
         if (existingFollow) {
             await this.followRepository.remove(existingFollow);
             currentUser.followingCount = Math.max(0, (currentUser.followingCount ?? 0) - 1);
@@ -382,10 +414,6 @@ export class UserService {
 
         const followingIds = followingUsers.map((followedUser) => followedUser.id);
 
-        this.logger.log(
-            `[getFollowingByIdentifier] authUserId=${user.id} followingCount=${followingIds.length}`,
-        );
-
         return {
             userId: user.id,
             followingIds,
@@ -420,15 +448,18 @@ export class UserService {
             },
         });
 
-        this.logger.log(
-            `[isFollowing] authUserId=${currentUser.id} targetId=${targetUser.id} following=${Boolean(existingFollow)}`,
-        );
-
         return {
             following: Boolean(existingFollow),
             isSelf: false,
             followerId: currentUser.id,
             followingId: targetUser.id,
         };
+    }
+
+    private ensureCanManageUser(currentUser: User, targetUser: User) {
+        if (currentUser.id !== targetUser.id) {
+            // TODO(authz): allow admin/mod overrides once role-based authorization is introduced.
+            throw new ForbiddenException("You can only modify your own user profile");
+        }
     }
 }

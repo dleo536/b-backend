@@ -3,15 +3,6 @@ import { ListType, ListVisibility } from '../list.entity';
 
 export class CreateListDto {
   @IsString()
-  @IsOptional()
-  ownerId?: string;
-
-  @IsString()
-  @IsNotEmpty()
-  @Length(1, 128)
-  firebaseUid: string; // Firebase UID - will be mapped to User.id (UUID) in service
-
-  @IsString()
   @IsNotEmpty()
   title: string;
 

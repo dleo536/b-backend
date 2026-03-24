@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException, Logger } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
 import { CreateReviewDto } from "./dto/create-review.dto";
@@ -80,38 +80,15 @@ export class ReviewService {
         return nextConditions;
     }
 
-    async create(createReviewDto: CreateReviewDto) {
-        const firebaseUid = createReviewDto.firebaseUid?.trim();
-        const userId = createReviewDto.userId?.trim();
-        const identifiers = [firebaseUid, userId]
-            .filter((value): value is string => typeof value === "string" && value.length > 0);
-
-        this.logger.log(
-            `[create] identifiers=${identifiers.join(",") || "none"} firebaseUid=${firebaseUid ?? "none"} userId=${userId ?? "none"} releaseGroupMbId=${createReviewDto.releaseGroupMbId}`,
-        );
-
-        if (identifiers.length === 0) {
-            throw new BadRequestException("firebaseUid or userId is required to create a review");
+    async create(createReviewDto: CreateReviewDto, currentUserOauthId: string) {
+        if (!currentUserOauthId?.trim()) {
+            throw new BadRequestException("Authenticated Firebase uid is required");
         }
 
-        let user: User | null = null;
-        let matchedIdentifier: string | null = null;
-        for (const identifier of identifiers) {
-            user = await this.findUserByIdentifier(identifier);
-            if (user) {
-                matchedIdentifier = identifier;
-                break;
-            }
-        }
+        const user = await this.findUserByIdentifier(currentUserOauthId);
 
         if (!user) {
-            throw new NotFoundException(`User with identifier(s) ${identifiers.join(", ")} not found`);
-        }
-
-        // Self-heal older users created before oauthId was populated.
-        if (!user.oauthId && matchedIdentifier && !this.isUuid(matchedIdentifier)) {
-            user.oauthId = matchedIdentifier;
-            await this.userRepository.save(user);
+            throw new NotFoundException("Authenticated user profile not found");
         }
 
         // If creating a non-draft review, check if one already exists
@@ -134,8 +111,8 @@ export class ReviewService {
 
         const review = this.reviewRepository.create({
             ...createReviewDto,
-            userId: user.id, // Use User UUID for FK
-            firebaseUid: firebaseUid || user.oauthId || (matchedIdentifier && !this.isUuid(matchedIdentifier) ? matchedIdentifier : undefined), // Store Firebase UID separately
+            userId: user.id,
+            firebaseUid: currentUserOauthId,
         });
         const result = await this.reviewRepository.save(review);
         return result;
@@ -149,6 +126,7 @@ export class ReviewService {
         spotifyAlbumId?: string,
         releaseGroupMbId?: string,
     ) {
+        // TODO(authz): enforce review visibility rules on public read paths.
         // Build the query filter
         let where: any = {};
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
@@ -177,10 +155,6 @@ export class ReviewService {
                 const followedIds = follows.map((follow) => follow.followingId);
                 const filteredUserIds = Array.from(new Set([...followedIds, viewerUser.id]));
 
-                this.logger.log(
-                    `[findAll] viewerUid=${viewerUid} authUserId=${viewerUser.id} followedCount=${followedIds.length}`,
-                );
-
                 if (followedIds.length > 0) {
                     const followedOnlyWhere = this.appendAlbumFilter(
                         { userId: In(followedIds) },
@@ -188,10 +162,6 @@ export class ReviewService {
                         releaseGroupMbId,
                     );
                     const followedOnlyCount = await this.reviewRepository.count({ where: followedOnlyWhere });
-
-                    this.logger.log(
-                        `[findAll] following-only totalCount=${followedOnlyCount} where=${JSON.stringify(followedOnlyWhere)}`,
-                    );
 
                     if (followedOnlyCount > 0) {
                         const filteredWhere = this.appendAlbumFilter(
@@ -221,14 +191,14 @@ export class ReviewService {
                     followFilterMode = "global-fallback";
                 }
             } else {
-                this.logger.warn(`[findAll] viewerUid=${viewerUid} could not be resolved to a user`);
+                this.logger.warn("[findAll] viewer token could not be resolved to a user profile");
             }
         }
 
         where = this.appendAlbumFilter(where, spotifyAlbumId, releaseGroupMbId);
 
         this.logger.log(
-            `[findAll] userID=${userID ?? "none"} viewerUid=${viewerUid ?? "none"} authUserId=${authUserId ?? "none"} mode=${followFilterMode} spotifyAlbumId=${spotifyAlbumId ?? "none"} releaseGroupMbId=${releaseGroupMbId ?? "none"} where=${JSON.stringify(where)} offset=${offset} limit=${limit}`,
+            `[findAll] userID=${userID ?? "none"} authUserId=${authUserId ?? "none"} mode=${followFilterMode} spotifyAlbumId=${spotifyAlbumId ?? "none"} releaseGroupMbId=${releaseGroupMbId ?? "none"} where=${JSON.stringify(where)} offset=${offset} limit=${limit}`,
         );
 
         // Get the total count of matching reviews
@@ -255,6 +225,7 @@ export class ReviewService {
     }
 
     async findOne(id: string) {
+        // TODO(authz): enforce review visibility rules for direct review lookups.
         const review = await this.reviewRepository.findOne({
             where: { id },
         });
@@ -266,16 +237,31 @@ export class ReviewService {
         return review;
     }
 
-    async update(id: string, updateReviewDto: UpdateReviewDto) {
-        const review = await this.findOne(id);
+    async update(id: string, updateReviewDto: UpdateReviewDto, currentUserOauthId: string) {
+        const review = await this.requireReviewAuthor(id, currentUserOauthId);
         Object.assign(review, updateReviewDto);
         const result = await this.reviewRepository.save(review);
         return result;
     }
 
-    async remove(id: string) {
-        const review = await this.findOne(id);
+    async remove(id: string, currentUserOauthId: string) {
+        const review = await this.requireReviewAuthor(id, currentUserOauthId);
         const result = await this.reviewRepository.remove(review);
         return result;
+    }
+
+    private async requireReviewAuthor(id: string, currentUserOauthId: string): Promise<Review> {
+        const currentUser = await this.findUserByIdentifier(currentUserOauthId);
+        if (!currentUser) {
+            throw new NotFoundException("Authenticated user profile not found");
+        }
+
+        const review = await this.findOne(id);
+        if (review.userId !== currentUser.id) {
+            // TODO(authz): allow admin/mod review moderation separately from author ownership.
+            throw new ForbiddenException("You can only modify your own reviews");
+        }
+
+        return review;
     }
 }

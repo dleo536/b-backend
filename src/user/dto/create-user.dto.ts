@@ -9,14 +9,6 @@ export class CreateUserDto {
     @IsOptional() @IsIn(Object.values(AuthProvider))
     authProvider?: AuthProvider;
 
-    @IsOptional()
-    @IsString()
-    oauthId?: string;
-
-    @IsString()
-    @IsNotEmpty()
-    password: string;
-
     @IsString()
     @IsNotEmpty()
     username: string;

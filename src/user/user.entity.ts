@@ -46,6 +46,7 @@ export const ProfileVisibilityValues = ['public', 'friends', 'private'];
 @Entity('user')
 @Index(['emailLower'], { unique: true })
 @Index(['usernameLower'], { unique: true })
+@Index(['oauthId'], { unique: true, where: '"oauthId" IS NOT NULL' })
 @Index(['createdAt'])
 export class User {
   @PrimaryGeneratedColumn('uuid')

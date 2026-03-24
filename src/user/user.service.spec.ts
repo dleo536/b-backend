@@ -154,7 +154,7 @@ describe("UserService follow behavior", () => {
         email: "unique@example.com",
         firstName: "Taken",
         lastName: "User",
-      } as any),
+      } as any, "firebase-uid-1"),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
@@ -172,7 +172,7 @@ describe("UserService follow behavior", () => {
         email: "taken@example.com",
         firstName: "Fresh",
         lastName: "User",
-      } as any),
+      } as any, "firebase-uid-1"),
     ).rejects.toBeInstanceOf(ConflictException);
   });
 
@@ -183,7 +183,7 @@ describe("UserService follow behavior", () => {
         email: "not-an-email",
         firstName: "Fresh",
         lastName: "User",
-      } as any),
+      } as any, "firebase-uid-1"),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
