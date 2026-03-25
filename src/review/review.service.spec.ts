@@ -1,5 +1,5 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { BadRequestException } from "@nestjs/common";
+import { BadRequestException, NotFoundException } from "@nestjs/common";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { ReviewService } from "./review.service";
@@ -80,6 +80,7 @@ describe("ReviewService", () => {
       expect.objectContaining({
         userId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
         firebaseUid: "firebase-uid-1",
+        visibility: "public",
       }),
     );
     expect(result.userId).toBe("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
@@ -109,6 +110,7 @@ describe("ReviewService", () => {
       expect.objectContaining({
         userId: backendUserId,
         spotifyAlbumId: "spotify-album-1",
+        visibility: "public",
       }),
     );
     expect(result.spotifyAlbumId).toBe("spotify-album-1");
@@ -135,13 +137,15 @@ describe("ReviewService", () => {
 
     const result = await service.findAll(undefined, 0, 10, "viewer-uid");
 
-    expect(result.data).toEqual([{ id: "global-review-1" }]);
+    expect(result.data).toEqual([
+      expect.objectContaining({ id: "global-review-1", visibility: "public" }),
+    ]);
     expect(result.mode).toBe("global");
-    expect(reviewRepository.find).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {},
-      }),
-    );
+    const findCall = (reviewRepository.find as jest.Mock).mock.calls[0][0];
+    expect(findCall.where).toEqual([
+      { isDraft: false },
+      { userId: "11111111-1111-1111-1111-111111111111", isDraft: true },
+    ]);
   });
 
   it("falls back to global reviews when follows exist but followed users have no reviews", async () => {
@@ -159,14 +163,20 @@ describe("ReviewService", () => {
 
     const result = await service.findAll(undefined, 0, 10, "viewer-uid");
 
-    expect(result.data).toEqual([{ id: "global-review-2" }]);
+    expect(result.data).toEqual([
+      expect.objectContaining({ id: "global-review-2", visibility: "public" }),
+    ]);
     expect(result.mode).toBe("global-fallback");
     const firstCountCall = (reviewRepository.count as jest.Mock).mock.calls[0][0];
     expect(firstCountCall.where.userId.value).toEqual([
       "22222222-2222-2222-2222-222222222222",
     ]);
+    expect(firstCountCall.where.isDraft).toBe(false);
     const findCall = (reviewRepository.find as jest.Mock).mock.calls[0][0];
-    expect(findCall.where).toEqual({});
+    expect(findCall.where).toEqual([
+      { isDraft: false },
+      { userId: "11111111-1111-1111-1111-111111111111", isDraft: true },
+    ]);
   });
 
   it("returns followed-only reviews when followed users have review content", async () => {
@@ -182,13 +192,26 @@ describe("ReviewService", () => {
 
     const result = await service.findAll(undefined, 0, 10, "viewer-uid");
 
-    expect(result.data).toEqual([{ id: "filtered-review-1" }]);
+    expect(result.data).toEqual([
+      expect.objectContaining({ id: "filtered-review-1", visibility: "public" }),
+    ]);
     expect(result.mode).toBe("following");
     expect(reviewRepository.count).toHaveBeenCalledTimes(2);
     const findCall = (reviewRepository.find as jest.Mock).mock.calls[0][0];
-    expect(findCall.where.userId.value.sort()).toEqual([
-      "11111111-1111-1111-1111-111111111111",
-      "22222222-2222-2222-2222-222222222222",
+    expect(findCall.where).toEqual([
+      {
+        userId: expect.objectContaining({
+          value: expect.arrayContaining([
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+          ]),
+        }),
+        isDraft: false,
+      },
+      {
+        userId: "11111111-1111-1111-1111-111111111111",
+        isDraft: true,
+      },
     ]);
   });
 
@@ -207,17 +230,109 @@ describe("ReviewService", () => {
     );
 
     expect(result).toEqual({
-      data: [{ id: "album-review-1", spotifyAlbumId: "spotify-album-1" }],
+      data: [expect.objectContaining({
+        id: "album-review-1",
+        spotifyAlbumId: "spotify-album-1",
+        visibility: "public",
+      })],
       hasMore: false,
       totalCount: 1,
       mode: "global",
     });
     expect(reviewRepository.count).toHaveBeenCalledWith({
-      where: { spotifyAlbumId: "spotify-album-1" },
+      where: { spotifyAlbumId: "spotify-album-1", isDraft: false },
     });
     expect(reviewRepository.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { spotifyAlbumId: "spotify-album-1" },
+        where: { spotifyAlbumId: "spotify-album-1", isDraft: false },
+      }),
+    );
+  });
+
+  it("returns drafts when the owner requests their own review list", async () => {
+    (userRepository.findOne as jest.Mock)
+      .mockResolvedValueOnce({
+        id: "33333333-3333-4333-8333-333333333333",
+        oauthId: "owner-uid",
+      })
+      .mockResolvedValueOnce({
+        id: "33333333-3333-4333-8333-333333333333",
+        oauthId: "owner-uid",
+      });
+    (reviewRepository.count as jest.Mock).mockResolvedValue(2);
+    (reviewRepository.find as jest.Mock).mockResolvedValue([
+      { id: "draft-review", isDraft: true },
+      { id: "published-review", isDraft: false },
+    ]);
+
+    const result = await service.findAll("owner-uid", 0, 10, "owner-uid");
+
+    expect(result.mode).toBe("user");
+    expect(result.data).toHaveLength(2);
+    const countCall = (reviewRepository.count as jest.Mock).mock.calls[0][0];
+    expect(countCall.where).toEqual([
+      { userId: "33333333-3333-4333-8333-333333333333" },
+      { firebaseUid: "owner-uid" },
+    ]);
+  });
+
+  it("filters drafts out when viewing another user's review list", async () => {
+    (userRepository.findOne as jest.Mock)
+      .mockResolvedValueOnce({
+        id: "99999999-9999-4999-8999-999999999999",
+        oauthId: "viewer-uid",
+      })
+      .mockResolvedValueOnce({
+        id: "44444444-4444-4444-8444-444444444444",
+        oauthId: "other-user-uid",
+      });
+    (reviewRepository.count as jest.Mock).mockResolvedValue(1);
+    (reviewRepository.find as jest.Mock).mockResolvedValue([
+      { id: "published-review", isDraft: false },
+    ]);
+
+    await service.findAll("other-user-uid", 0, 10, "viewer-uid");
+
+    const countCall = (reviewRepository.count as jest.Mock).mock.calls[0][0];
+    expect(countCall.where).toEqual([
+      { userId: "44444444-4444-4444-8444-444444444444", isDraft: false },
+      { firebaseUid: "other-user-uid", isDraft: false },
+    ]);
+  });
+
+  it("rejects direct draft lookup for non-owners", async () => {
+    (reviewRepository.findOne as jest.Mock).mockResolvedValue({
+      id: "review-draft",
+      userId: "55555555-5555-4555-8555-555555555555",
+      firebaseUid: "owner-uid",
+      isDraft: true,
+      visibility: "private",
+    });
+    (userRepository.findOne as jest.Mock).mockResolvedValue({
+      id: "66666666-6666-4666-8666-666666666666",
+      oauthId: "viewer-uid",
+    });
+
+    await expect(service.findOne("review-draft", "viewer-uid")).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it("allows owners to read their own drafts", async () => {
+    (reviewRepository.findOne as jest.Mock).mockResolvedValue({
+      id: "review-draft",
+      userId: "77777777-7777-4777-8777-777777777777",
+      firebaseUid: "owner-uid",
+      isDraft: true,
+      visibility: "private",
+    });
+    (userRepository.findOne as jest.Mock).mockResolvedValue({
+      id: "77777777-7777-4777-8777-777777777777",
+      oauthId: "owner-uid",
+    });
+
+    await expect(service.findOne("review-draft", "owner-uid")).resolves.toEqual(
+      expect.objectContaining({
+        id: "review-draft",
+        isDraft: true,
       }),
     );
   });

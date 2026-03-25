@@ -1,12 +1,13 @@
 import {
   IsBoolean,
-  IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Length,
   Max,
   Min,
 } from "class-validator";
+import { Type } from "class-transformer";
 
 export class TrackHighlightDto {
   @IsOptional() @IsString() @Length(1, 64)
@@ -18,7 +19,7 @@ export class TrackHighlightDto {
   @IsOptional() @IsBoolean()
   favorite?: boolean;
 
-  @IsOptional() @IsInt() @Min(1) @Max(10)
+  @IsOptional() @Type(() => Number) @IsNumber({ allowInfinity: false, allowNaN: false, maxDecimalPlaces: 1 }) @Min(0) @Max(10)
   ratingHalfSteps?: number;
 
   @IsOptional() @IsString() @Length(1, 5000)

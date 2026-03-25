@@ -95,11 +95,79 @@ describe("Request validation", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
+  it("accepts one-decimal review ratings on a 10-point scale", async () => {
+    await expect(
+      pipe.transform(
+        {
+          releaseGroupMbId: "rg-1",
+          albumTitleSnapshot: "Album",
+          artistNameSnapshot: "Artist",
+          ratingHalfSteps: 9.2,
+        },
+        bodyMetadata(CreateReviewDto),
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        ratingHalfSteps: 9.2,
+      }),
+    );
+  });
+
+  it("rejects review ratings with more than one decimal place", async () => {
+    await expect(
+      pipe.transform(
+        {
+          releaseGroupMbId: "rg-1",
+          albumTitleSnapshot: "Album",
+          artistNameSnapshot: "Artist",
+          ratingHalfSteps: 9.21,
+        },
+        bodyMetadata(CreateReviewDto),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("rejects review ratings above 10", async () => {
+    await expect(
+      pipe.transform(
+        {
+          ratingHalfSteps: 10.1,
+        },
+        bodyMetadata(UpdateReviewDto),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
   it("rejects extra undeclared review update fields", async () => {
     await expect(
       pipe.transform(
         {
           likesCount: 999,
+        },
+        bodyMetadata(UpdateReviewDto),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("rejects unsupported review visibility on create", async () => {
+    await expect(
+      pipe.transform(
+        {
+          releaseGroupMbId: "rg-1",
+          albumTitleSnapshot: "Album",
+          artistNameSnapshot: "Artist",
+          visibility: "private",
+        },
+        bodyMetadata(CreateReviewDto),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("rejects unsupported review visibility on update", async () => {
+    await expect(
+      pipe.transform(
+        {
+          visibility: "friends",
         },
         bodyMetadata(UpdateReviewDto),
       ),

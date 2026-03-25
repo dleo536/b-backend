@@ -43,9 +43,13 @@ export class ReviewController {
         );
     }
 
+    @UseGuards(OptionalFirebaseAuthGuard)
     @Get(':id')
-    findOne(@Param('id') id: string) {
-        return this.reviewService.findOne(id);
+    findOne(
+        @Param('id') id: string,
+        @CurrentUser() currentUser?: AuthenticatedUser,
+    ) {
+        return this.reviewService.findOne(id, currentUser?.uid);
     }
 
     @UseGuards(FirebaseAuthGuard)

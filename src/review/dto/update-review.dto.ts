@@ -1,16 +1,14 @@
 // src/reviews/dto/update-review.dto.ts
 import { Type } from 'class-transformer';
 import {
-  IsArray, IsBoolean, IsDateString, IsEnum, IsInt,
-  IsString, Length, Max, Min, ValidateNested, ArrayMaxSize,
+  IsArray, IsBoolean, IsDateString, IsNumber,
+  IsString, Length, Max, Min, ValidateNested, ArrayMaxSize, IsInt,
   IsOptional,
-  IsIn,
 } from 'class-validator';
-import { ReviewVisibility } from '../review.entity';
 import { TrackHighlightDto } from './track-highlight.dto';
 
 export class UpdateReviewDto {
-  @IsOptional() @IsInt() @Min(1) @Max(10)
+  @IsOptional() @Type(() => Number) @IsNumber({ allowInfinity: false, allowNaN: false, maxDecimalPlaces: 1 }) @Min(0) @Max(10)
   ratingHalfSteps?: number;
 
   @IsOptional() @IsString() @Length(1, 140)
@@ -24,9 +22,6 @@ export class UpdateReviewDto {
 
   @IsOptional() @IsBoolean()
   isDraft?: boolean;
-
-  @IsOptional() @IsIn(Object.values(ReviewVisibility))
-  visibility?: ReviewVisibility;
 
   @IsOptional() @IsDateString()
   listenedOn?: string;

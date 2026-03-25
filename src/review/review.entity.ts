@@ -1,6 +1,23 @@
 import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, Index, ManyToOne, JoinColumn } from "typeorm";
 import { User } from "../user/user.entity";
 
+const numericRatingTransformer = {
+  to: (value?: number | null) => {
+    if (value === null || value === undefined) {
+      return value;
+    }
+
+    return Number(value.toFixed(1));
+  },
+  from: (value?: string | number | null) => {
+    if (value === null || value === undefined) {
+      return value;
+    }
+
+    return Number(value);
+  },
+};
+
 export const ReviewVisibility = {
   PUBLIC: 'public',
   FRIENDS: 'friends',
@@ -66,9 +83,9 @@ export class Review {
   coverUrlSnapshot?: string;
 
   // --- Review content ---
-  // Store rating as a half-step integer (0..10) so 0.5..5.0 becomes 1..10. Easier to index & validate.
-  @Column({ type: 'smallint', nullable: true })
-  ratingHalfSteps?: number; // e.g., 7 == 3.5 stars
+  // Stored as a 10-point score with one decimal place, e.g. 9.2 / 10.
+  @Column({ type: 'numeric', precision: 3, scale: 1, nullable: true, transformer: numericRatingTransformer })
+  ratingHalfSteps?: number;
 
   @Column({ type: 'varchar', length: 140, nullable: true })
   headline?: string;
@@ -94,7 +111,7 @@ export class Review {
    * Lightweight per-track notes/faves/ratings without creating a full join table.
    * Example shape:
    * [
-   *   { trackMbId: '...', title: 'Intro', favorite: true, ratingHalfSteps: 8 },
+   *   { trackMbId: '...', title: 'Intro', favorite: true, ratingHalfSteps: 8.5 },
    *   { trackMbId: '...', title: 'Track 2', comment: 'great chorus' }
    * ]
    */

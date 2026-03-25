@@ -3,7 +3,7 @@ import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
 import { CreateReviewDto } from "./dto/create-review.dto";
 import { UpdateReviewDto } from "./dto/update-review.dto";
-import { Review } from "./review.entity";
+import { Review, ReviewVisibility } from "./review.entity";
 import { User } from "../user/user.entity";
 import { UserFollow } from "../user/follow.entity";
 
@@ -80,6 +80,93 @@ export class ReviewService {
         return nextConditions;
     }
 
+    private buildReviewConditions(
+        baseConditions: Array<Record<string, unknown>>,
+        includeDrafts: boolean,
+    ) {
+        const conditions = baseConditions
+            .filter((condition) => Boolean(condition))
+            .map((condition) => (
+                includeDrafts
+                    ? { ...condition }
+                    : { ...condition, isDraft: false }
+            ));
+
+        if (conditions.length === 0) {
+            return includeDrafts ? {} : { isDraft: false };
+        }
+
+        return conditions.length === 1 ? conditions[0] : conditions;
+    }
+
+    private buildUserReviewWhere(
+        userIdentifier: string,
+        resolvedUserId: string | null,
+        includeDrafts: boolean,
+    ) {
+        const normalizedIdentifier = userIdentifier?.trim();
+        const baseConditions: Array<Record<string, unknown>> = [];
+
+        if (resolvedUserId) {
+            baseConditions.push({ userId: resolvedUserId });
+        }
+
+        if (normalizedIdentifier) {
+            if (this.isUuid(normalizedIdentifier)) {
+                if (normalizedIdentifier !== resolvedUserId) {
+                    baseConditions.push({ userId: normalizedIdentifier });
+                }
+            } else {
+                baseConditions.push({ firebaseUid: normalizedIdentifier });
+            }
+        }
+
+        return this.buildReviewConditions(baseConditions, includeDrafts);
+    }
+
+    private appendViewerDraftAccess(where: any, viewerUserId: string | null) {
+        if (!viewerUserId) {
+            return where;
+        }
+
+        const baseConditions = Array.isArray(where) ? where : [where];
+        const draftConditions = baseConditions.map((condition) => {
+            const normalizedCondition = { ...(condition ?? {}) };
+            delete normalizedCondition.isDraft;
+            delete normalizedCondition.userId;
+
+            return {
+                ...normalizedCondition,
+                userId: viewerUserId,
+                isDraft: true,
+            };
+        });
+
+        return [...baseConditions, ...draftConditions];
+    }
+
+    private normalizeReviewForResponse(review: Review): Review {
+        review.visibility = ReviewVisibility.PUBLIC;
+
+        return review;
+    }
+
+    private normalizeReviewsForResponse(reviews: Review[]): Review[] {
+        return reviews.map((review) => this.normalizeReviewForResponse(review));
+    }
+
+    private async getReviewOrThrow(id: string): Promise<Review> {
+        const review = await this.reviewRepository.findOne({
+            where: { id },
+        });
+
+        if (!review) {
+            throw new NotFoundException("Review not found");
+        }
+
+        return review;
+    }
+
     async create(createReviewDto: CreateReviewDto, currentUserOauthId: string) {
         if (!currentUserOauthId?.trim()) {
             throw new BadRequestException("Authenticated Firebase uid is required");
@@ -123,15 +210,17 @@ export class ReviewService {
             headline: createReviewDto.headline,
             body: createReviewDto.body,
             isSpoiler: createReviewDto.isSpoiler ?? false,
-            isDraft: createReviewDto.isDraft ?? false,
-            visibility: createReviewDto.visibility,
+            isDraft,
+            // Launch rule: all published reviews are public.
+            visibility: ReviewVisibility.PUBLIC,
             listenedOn: createReviewDto.listenedOn,
             relistenCount: createReviewDto.relistenCount ?? 0,
             trackHighlights: createReviewDto.trackHighlights,
             tags: createReviewDto.tags ?? [],
+            publishedAt: isDraft ? undefined : new Date(),
         });
-        const result = await this.reviewRepository.save(review);
-        return result;
+        const result: Review = await this.reviewRepository.save(review);
+        return this.normalizeReviewForResponse(result);
     }
 
     async findAll(
@@ -142,28 +231,26 @@ export class ReviewService {
         spotifyAlbumId?: string,
         releaseGroupMbId?: string,
     ) {
-        // TODO(authz): enforce review visibility rules on public read paths.
         // Build the query filter
-        let where: any = {};
+        const normalizedViewerUid = viewerUid?.trim() || undefined;
+        const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
+        const viewerUserId = viewerUser?.id ?? null;
+        let where: any = { isDraft: false };
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
-        let authUserId: string | null = null;
+
         if (userID) {
             followFilterMode = "user";
-            if (this.isUuid(userID)) {
-                where = [{ userId: userID }, { firebaseUid: userID }];
-            } else {
-                const linkedUser = await this.findUserByIdentifier(userID);
-                authUserId = linkedUser?.id ?? null;
-                if (linkedUser) {
-                    where = [{ userId: linkedUser.id }, { firebaseUid: userID }];
-                } else {
-                    where = { firebaseUid: userID };
-                }
-            }
-        } else if (viewerUid) {
-            const viewerUser = await this.findUserByIdentifier(viewerUid);
-            authUserId = viewerUser?.id ?? null;
+            const linkedUser = await this.findUserByIdentifier(userID);
+            const linkedUserId = linkedUser?.id ?? (this.isUuid(userID) ? userID : null);
+            const includeDrafts = Boolean(
+                normalizedViewerUid && (
+                    normalizedViewerUid === userID ||
+                    (viewerUserId && linkedUserId && viewerUserId === linkedUserId)
+                ),
+            );
 
+            where = this.buildUserReviewWhere(userID, linkedUserId, includeDrafts);
+        } else if (normalizedViewerUid) {
             if (viewerUser) {
                 const follows = await this.followRepository.find({
                     where: { followerId: viewerUser.id },
@@ -173,31 +260,32 @@ export class ReviewService {
 
                 if (followedIds.length > 0) {
                     const followedOnlyWhere = this.appendAlbumFilter(
-                        { userId: In(followedIds) },
+                        { userId: In(followedIds), isDraft: false },
                         spotifyAlbumId,
                         releaseGroupMbId,
                     );
                     const followedOnlyCount = await this.reviewRepository.count({ where: followedOnlyWhere });
 
                     if (followedOnlyCount > 0) {
-                        const filteredWhere = this.appendAlbumFilter(
-                            { userId: In(filteredUserIds) },
+                        const publicFeedWhere = this.appendAlbumFilter(
+                            { userId: In(filteredUserIds), isDraft: false },
                             spotifyAlbumId,
                             releaseGroupMbId,
                         );
+                        const filteredWhere = this.appendViewerDraftAccess(publicFeedWhere, viewerUser.id);
                         const filteredTotalCount = await this.reviewRepository.count({ where: filteredWhere });
                         const reviews = await this.reviewRepository.find({
                             where: filteredWhere,
                             skip: offset,
                             take: limit,
                             order: {
-                                createdAt: 'DESC',
+                                createdAt: "DESC",
                             },
                         });
                         const hasMore = offset + reviews.length < filteredTotalCount;
 
                         return {
-                            data: reviews,
+                            data: this.normalizeReviewsForResponse(reviews),
                             hasMore,
                             totalCount: filteredTotalCount,
                             mode: "following",
@@ -212,9 +300,12 @@ export class ReviewService {
         }
 
         where = this.appendAlbumFilter(where, spotifyAlbumId, releaseGroupMbId);
+        if (!userID) {
+            where = this.appendViewerDraftAccess(where, viewerUserId);
+        }
 
         this.logger.log(
-            `[findAll] userID=${userID ?? "none"} authUserId=${authUserId ?? "none"} mode=${followFilterMode} spotifyAlbumId=${spotifyAlbumId ?? "none"} releaseGroupMbId=${releaseGroupMbId ?? "none"} where=${JSON.stringify(where)} offset=${offset} limit=${limit}`,
+            `[findAll] userID=${userID ?? "none"} authUserId=${viewerUserId ?? "none"} mode=${followFilterMode} spotifyAlbumId=${spotifyAlbumId ?? "none"} releaseGroupMbId=${releaseGroupMbId ?? "none"} where=${JSON.stringify(where)} offset=${offset} limit=${limit}`,
         );
 
         // Get the total count of matching reviews
@@ -226,35 +317,64 @@ export class ReviewService {
             skip: offset,
             take: limit,
             order: {
-                createdAt: 'DESC',
+                createdAt: "DESC",
             },
         });
 
         const hasMore = offset + reviews.length < totalCount;
 
         return {
-            data: reviews,
+            data: this.normalizeReviewsForResponse(reviews),
             hasMore,
             totalCount,
             mode: followFilterMode,
         };
     }
 
-    async findOne(id: string) {
-        // TODO(authz): enforce review visibility rules for direct review lookups.
-        const review = await this.reviewRepository.findOne({
-            where: { id },
-        });
+    async findOne(id: string, viewerUid?: string) {
+        const review = await this.getReviewOrThrow(id);
 
-        if (!review) {
-            throw new NotFoundException('Review not found');
+        if (!review.isDraft) {
+            return this.normalizeReviewForResponse(review);
         }
 
-        return review;
+        const normalizedViewerUid = viewerUid?.trim();
+        if (!normalizedViewerUid) {
+            throw new NotFoundException("Review not found");
+        }
+
+        const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
+        const isOwner = Boolean(
+            (viewerUser && viewerUser.id === review.userId) ||
+            review.firebaseUid === normalizedViewerUid,
+        );
+
+        if (!isOwner) {
+            throw new NotFoundException("Review not found");
+        }
+
+        return this.normalizeReviewForResponse(review);
     }
 
     async update(id: string, updateReviewDto: UpdateReviewDto, currentUserOauthId: string) {
         const review = await this.requireReviewAuthor(id, currentUserOauthId);
+        const nextIsDraft = updateReviewDto.isDraft ?? review.isDraft;
+
+        if (!nextIsDraft) {
+            const existingPublishedReview = await this.reviewRepository.findOne({
+                where: {
+                    userId: review.userId,
+                    releaseGroupMbId: review.releaseGroupMbId,
+                    isDraft: false,
+                },
+            });
+
+            if (existingPublishedReview && existingPublishedReview.id !== review.id) {
+                throw new ConflictException(
+                    `A published review already exists for this album. Use PATCH /reviews/${existingPublishedReview.id} to update it, or keep this review as a draft.`,
+                );
+            }
+        }
 
         if (updateReviewDto.ratingHalfSteps !== undefined) {
             review.ratingHalfSteps = updateReviewDto.ratingHalfSteps;
@@ -268,12 +388,8 @@ export class ReviewService {
         if (updateReviewDto.isSpoiler !== undefined) {
             review.isSpoiler = updateReviewDto.isSpoiler;
         }
-        if (updateReviewDto.isDraft !== undefined) {
-            review.isDraft = updateReviewDto.isDraft;
-        }
-        if (updateReviewDto.visibility !== undefined) {
-            review.visibility = updateReviewDto.visibility;
-        }
+        review.isDraft = nextIsDraft;
+        review.visibility = ReviewVisibility.PUBLIC;
         if (updateReviewDto.listenedOn !== undefined) {
             review.listenedOn = updateReviewDto.listenedOn;
         }
@@ -287,8 +403,12 @@ export class ReviewService {
             review.tags = updateReviewDto.tags;
         }
 
+        if (!review.isDraft && !review.publishedAt) {
+            review.publishedAt = new Date();
+        }
+
         const result = await this.reviewRepository.save(review);
-        return result;
+        return this.normalizeReviewForResponse(result);
     }
 
     async remove(id: string, currentUserOauthId: string) {
@@ -303,7 +423,7 @@ export class ReviewService {
             throw new NotFoundException("Authenticated user profile not found");
         }
 
-        const review = await this.findOne(id);
+        const review = await this.getReviewOrThrow(id);
         if (review.userId !== currentUser.id) {
             // TODO(authz): allow admin/mod review moderation separately from author ownership.
             throw new ForbiddenException("You can only modify your own reviews");
