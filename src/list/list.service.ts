@@ -1,17 +1,16 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { ArrayContains, ILike, In, Repository } from "typeorm";
 import { CreateListDto } from "./dto/create-list.dto";
 import { UpdateListDto } from "./dto/update-list.dto";
-import { AlbumList } from "./list.entity";
+import { AlbumList, ListVisibility } from "./list.entity";
 import { User } from "../user/user.entity";
 import { UserFollow } from "../user/follow.entity";
 import { ListLike } from "./list-like.entity";
+import { AuthUserContextService } from "../auth/auth-user-context.service";
 
 @Injectable()
 export class ListService {
-    private readonly logger = new Logger(ListService.name);
-
     constructor(
         @InjectRepository(AlbumList)
         private listRepository: Repository<AlbumList>,
@@ -21,6 +20,7 @@ export class ListService {
         private followRepository: Repository<UserFollow>,
         @InjectRepository(ListLike)
         private listLikeRepository: Repository<ListLike>,
+        private readonly authUserContextService: AuthUserContextService,
     ) {}
 
     private isUuid(value: string): boolean {
@@ -80,6 +80,85 @@ export class ListService {
                     .filter((id) => id.length > 0),
             ),
         );
+    }
+
+    private normalizeListVisibility(visibility?: string) {
+        if (visibility === undefined || visibility === null || visibility === "") {
+            return ListVisibility.PUBLIC;
+        }
+
+        return visibility === ListVisibility.PUBLIC
+            ? ListVisibility.PUBLIC
+            : ListVisibility.PRIVATE;
+    }
+
+    private isListPublic(list: AlbumList): boolean {
+        return this.normalizeListVisibility(list.visibility) === "public";
+    }
+
+    private canViewList(list: AlbumList, viewerUserId?: string | null): boolean {
+        return this.isListPublic(list) || (Boolean(viewerUserId) && list.ownerId === viewerUserId);
+    }
+
+    private toWhereConditions(where: any): Record<string, unknown>[] {
+        if (Array.isArray(where)) {
+            return where.length > 0 ? where : [{}];
+        }
+
+        return [where ?? {}];
+    }
+
+    private dedupeWhereConditions(conditions: Record<string, unknown>[]) {
+        const serialized = new Set<string>();
+        return conditions.filter((condition) => {
+            const key = JSON.stringify(condition);
+            if (serialized.has(key)) {
+                return false;
+            }
+            serialized.add(key);
+            return true;
+        });
+    }
+
+    private buildReadableListWhere(baseWhere: any, ownerAccessUserId?: string | null) {
+        const baseConditions = this.toWhereConditions(baseWhere);
+        const publicConditions = baseConditions.map((condition) => ({
+            ...condition,
+            visibility: ListVisibility.PUBLIC,
+        }));
+
+        if (!ownerAccessUserId) {
+            return publicConditions.length === 1 ? publicConditions[0] : publicConditions;
+        }
+
+        const ownerConditions = baseConditions.map((condition) => {
+            const nextCondition: Record<string, unknown> = {
+                ...condition,
+                ownerId: ownerAccessUserId,
+            };
+            delete nextCondition.firebaseUid;
+            delete nextCondition.visibility;
+            return nextCondition;
+        });
+
+        const conditions = this.dedupeWhereConditions([
+            ...publicConditions,
+            ...ownerConditions,
+        ]);
+
+        return conditions.length === 1 ? conditions[0] : conditions;
+    }
+
+    private async getListOrThrowById(id: string): Promise<AlbumList> {
+        const list = await this.listRepository.findOne({
+            where: { id },
+        });
+
+        if (!list) {
+            throw new NotFoundException('List not found');
+        }
+
+        return list;
     }
 
     private appendTitleFilter(where: any, title?: string) {
@@ -156,7 +235,9 @@ export class ListService {
         title?: string,
         albumId?: string,
     ) {
-        // TODO(authz): enforce list visibility rules on read paths beyond the current public feed behavior.
+        const normalizedViewerUid = viewerUid?.trim() || undefined;
+        const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
+        const viewerUserId = viewerUser?.id ?? null;
         let where: any = {};
         let linkedUserId: string | null = null;
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
@@ -172,9 +253,14 @@ export class ListService {
                     ? [{ ownerId: linkedUser.id }, { firebaseUid: userID }]
                     : { firebaseUid: userID };
             }
+
+            const ownerAccessUserId =
+                viewerUserId && linkedUserId && viewerUserId === linkedUserId
+                    ? viewerUserId
+                    : null;
+            where = this.buildReadableListWhere(where, ownerAccessUserId);
         } else if (viewerUid) {
-            const viewerUser = await this.findUserByIdentifier(viewerUid);
-            linkedUserId = viewerUser?.id ?? null;
+            linkedUserId = viewerUserId;
 
             if (viewerUser) {
                 const follows = await this.followRepository.find({
@@ -184,18 +270,20 @@ export class ListService {
                 const filteredOwnerIds = Array.from(new Set([...followedIds, viewerUser.id]));
 
                 if (followedIds.length > 0) {
-                    let followedOnlyWhere = this.appendTitleFilter(
+                    let followedOnlyWhere = this.buildReadableListWhere(
                         { ownerId: In(followedIds), isSystem: false },
-                        title,
+                        null,
                     );
+                    followedOnlyWhere = this.appendTitleFilter(followedOnlyWhere, title);
                     followedOnlyWhere = this.appendAlbumFilter(followedOnlyWhere, albumId);
                     const followedOnlyCount = await this.listRepository.count({ where: followedOnlyWhere });
 
                     if (followedOnlyCount > 0) {
-                        let filteredWhere = this.appendTitleFilter(
+                        let filteredWhere = this.buildReadableListWhere(
                             { ownerId: In(filteredOwnerIds), isSystem: false },
-                            title,
+                            viewerUser.id,
                         );
+                        filteredWhere = this.appendTitleFilter(filteredWhere, title);
                         filteredWhere = this.appendAlbumFilter(filteredWhere, albumId);
                         const filteredTotalCount = await this.listRepository.count({ where: filteredWhere });
                         const lists = await this.listRepository.find({
@@ -217,24 +305,24 @@ export class ListService {
                     }
 
                     followFilterMode = "global-fallback";
-                    where = { isSystem: false };
+                    where = this.buildReadableListWhere({ isSystem: false }, viewerUser.id);
                 } else {
-                    where = { isSystem: false };
+                    where = this.buildReadableListWhere({ isSystem: false }, viewerUser.id);
                 }
             } else {
-                this.logger.warn("[findAll] viewer token could not be resolved to a user profile");
-                where = { isSystem: false };
+                where = this.buildReadableListWhere({ isSystem: false }, null);
             }
         } else {
-            where = { isSystem: false };
+            where = this.buildReadableListWhere({ isSystem: false }, null);
         }
 
-        where = this.appendTitleFilter(where, title);
-        where = this.appendAlbumFilter(where, albumId);
-
-        this.logger.log(
-            `[findAll] userID=${userID ?? "none"} linkedUserId=${linkedUserId ?? "none"} mode=${followFilterMode} title=${title ?? "none"} albumId=${albumId ?? "none"} offset=${offset} limit=${limit} where=${JSON.stringify(where)}`,
-        );
+        if (!userID) {
+            where = this.appendTitleFilter(where, title);
+            where = this.appendAlbumFilter(where, albumId);
+        } else {
+            where = this.appendTitleFilter(where, title);
+            where = this.appendAlbumFilter(where, albumId);
+        }
 
         // Get the total count of matching documents
         const totalCount = await this.listRepository.count({ where });
@@ -251,10 +339,6 @@ export class ListService {
 
         const hasMore = offset + lists.length < totalCount;
 
-        this.logger.log(
-            `[findAll] resultCount=${lists.length} totalCount=${totalCount} hasMore=${hasMore}`,
-        );
-
         return {
             data: lists,
             hasMore,
@@ -263,19 +347,30 @@ export class ListService {
         };
     }
 
-    async findByUserId(userID: string) {
+    async findByUserId(userID: string, viewerIdentifier?: string) {
+        const viewer = await this.findUserByIdentifier(viewerIdentifier);
+        const viewerUserId = viewer?.id ?? null;
+        let linkedUserId: string | null = null;
         let where: any;
         if (this.isUuid(userID)) {
             where = [{ ownerId: userID }, { firebaseUid: userID }];
+            linkedUserId = userID;
         } else {
             const linkedUser = await this.findUserByIdentifier(userID);
+            linkedUserId = linkedUser?.id ?? null;
             where = linkedUser
                 ? [{ ownerId: linkedUser.id }, { firebaseUid: userID }]
                 : { firebaseUid: userID };
         }
 
+        const ownerAccessUserId =
+            viewerUserId && linkedUserId && viewerUserId === linkedUserId
+                ? viewerUserId
+                : null;
+        const readableWhere = this.buildReadableListWhere(where, ownerAccessUserId);
+
         const lists = await this.listRepository.find({
-            where,
+            where: readableWhere,
             order: {
                 createdAt: 'DESC',
             },
@@ -284,13 +379,12 @@ export class ListService {
         return lists;
     }
 
-    async findOne(id: string) {
-        // TODO(authz): enforce list visibility rules for direct list lookups.
-        const list = await this.listRepository.findOne({
-            where: { id },
-        });
+    async findOne(id: string, viewerIdentifier?: string) {
+        const list = await this.getListOrThrowById(id);
+        const viewer = await this.findUserByIdentifier(viewerIdentifier);
+        const viewerUserId = viewer?.id ?? null;
 
-        if (!list) {
+        if (!this.canViewList(list, viewerUserId)) {
             throw new NotFoundException('List not found');
         }
 
@@ -299,7 +393,7 @@ export class ListService {
 
     async likeList(listId: string, viewerIdentifier: string) {
         const viewer = await this.requireUserByIdentifier(viewerIdentifier, "Viewer");
-        const list = await this.findOne(listId);
+        const list = await this.findOne(listId, viewerIdentifier);
 
         const existingLike = await this.listLikeRepository.findOne({
             where: {
@@ -338,7 +432,7 @@ export class ListService {
 
     async unlikeList(listId: string, viewerIdentifier: string) {
         const viewer = await this.requireUserByIdentifier(viewerIdentifier, "Viewer");
-        const list = await this.findOne(listId);
+        const list = await this.findOne(listId, viewerIdentifier);
 
         const existingLike = await this.listLikeRepository.findOne({
             where: {
@@ -364,7 +458,7 @@ export class ListService {
 
     async isListLiked(listId: string, viewerIdentifier: string) {
         const viewer = await this.requireUserByIdentifier(viewerIdentifier, "Viewer");
-        const list = await this.findOne(listId);
+        const list = await this.findOne(listId, viewerIdentifier);
 
         const existingLike = await this.listLikeRepository.findOne({
             where: {
@@ -383,25 +477,23 @@ export class ListService {
 
     async getLikedLists(viewerIdentifier: string, offset: number = 0, limit: number = 50) {
         const viewer = await this.requireUserByIdentifier(viewerIdentifier, "Viewer");
-        const totalCount = await this.listLikeRepository.count({
-            where: { userId: viewer.id },
-        });
-
         const likes = await this.listLikeRepository.find({
             where: { userId: viewer.id },
             relations: ["list"],
-            skip: offset,
-            take: limit,
             order: { createdAt: "DESC" },
         });
 
         const likedLists = likes
             .map((like) => like.list)
-            .filter((list): list is AlbumList => Boolean(list));
+            .filter((list): list is AlbumList => Boolean(list))
+            .filter((list) => this.canViewList(list, viewer.id));
+
+        const totalCount = likedLists.length;
+        const paginatedLists = likedLists.slice(offset, offset + limit);
 
         return {
-            data: likedLists,
-            hasMore: offset + likedLists.length < totalCount,
+            data: paginatedLists,
+            hasMore: offset + paginatedLists.length < totalCount,
             totalCount,
         };
     }
@@ -442,9 +534,15 @@ export class ListService {
         return result;
     }
 
+    async removeAsAdmin(id: string, currentUserOauthId: string) {
+        await this.authUserContextService.requireAdminByOauthId(currentUserOauthId);
+        const list = await this.getListOrThrowById(id);
+        return this.listRepository.softRemove(list);
+    }
+
     private async requireListOwner(listId: string, currentUserOauthId: string): Promise<AlbumList> {
         const currentUser = await this.requireUserByIdentifier(currentUserOauthId, "Authenticated user");
-        const list = await this.findOne(listId);
+        const list = await this.getListOrThrowById(listId);
 
         if (list.ownerId !== currentUser.id) {
             // TODO(authz): allow admin/mod list management and collaborative editor permissions.

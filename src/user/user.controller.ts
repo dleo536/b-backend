@@ -5,6 +5,26 @@ import type { AuthenticatedUser } from "../auth/auth-user.interface";
 import { UserService } from "./user.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
+import { CheckAvailabilityDto } from "./dto/check-availability.dto";
+import {
+    toPublicUserResponse,
+    toPublicUserResponses,
+    toSelfUserResponse,
+} from "./user-response";
+
+const parseNonNegativeInt = (
+    value: string | undefined,
+    fallback: number,
+    max: number,
+) => {
+    const parsed = Number.parseInt(value ?? "", 10);
+
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return fallback;
+    }
+
+    return Math.min(parsed, max);
+};
 
 @Controller('users')
 export class UserController {
@@ -16,46 +36,51 @@ export class UserController {
         @Body() createUserDto: CreateUserDto,
         @CurrentUser() currentUser: AuthenticatedUser,
     ) {
-        return this.userService.create(createUserDto, currentUser.uid);
+        return this.userService
+            .create(createUserDto, currentUser.uid)
+            .then((user) => toSelfUserResponse(user));
     }
 
-    @Get('availability')
+    @Post('availability')
     checkAvailability(
-        @Query('username') username?: string,
-        @Query('email') email?: string,
+        @Body() checkAvailabilityDto: CheckAvailabilityDto,
     ) {
-        return this.userService.checkAvailability(username, email);
+        return this.userService.checkAvailability(
+            checkAvailabilityDto.username,
+            checkAvailabilityDto.email,
+        );
     }
 
     @Get()
     findAll(
         @Query('p') page?: string,
         @Query('username') username?: string,
-        @Query('oauthId') oauthId?: string,
         @Query('offset') offset?: string,
         @Query('limit') limit?: string,
     ) {
-        if (oauthId) {
-            return this.userService.findByOauthId(oauthId);
-        }
-
         // Handle the duplicate route - if username is provided with offset/limit, use findByUsername
         if (username && (offset !== undefined || limit !== undefined)) {
-            const offsetNum = offset ? parseInt(offset) : 0;
-            const limitNum = limit ? parseInt(limit) : 10;
-            return this.userService.findByUsername(username, offsetNum, limitNum);
+            const offsetNum = parseNonNegativeInt(offset, 0, 100);
+            const limitNum = parseNonNegativeInt(limit, 10, 100);
+            return this.userService
+                .findByUsername(username, offsetNum, limitNum)
+                .then((users) => toPublicUserResponses(users));
         }
 
         // Otherwise use the paginated findAll
-        const pageNum = page ? parseInt(page) : 0;
+        const pageNum = parseNonNegativeInt(page, 0, 1000);
         const usersPerPage = 4;
-        return this.userService.findAll(pageNum, usersPerPage, username);
+        return this.userService
+            .findAll(pageNum, usersPerPage, username)
+            .then((users) => toPublicUserResponses(users));
     }
 
     @UseGuards(FirebaseAuthGuard)
     @Get("me")
     getMe(@CurrentUser() currentUser: AuthenticatedUser) {
-        return this.userService.findByOauthIdOrThrow(currentUser.uid);
+        return this.userService
+            .findByOauthIdOrThrow(currentUser.uid)
+            .then((user) => toSelfUserResponse(user));
     }
 
     @UseGuards(FirebaseAuthGuard)
@@ -79,12 +104,18 @@ export class UserController {
     @UseGuards(FirebaseAuthGuard)
     @Get('me/following')
     getMyFollowing(@CurrentUser() currentUser: AuthenticatedUser) {
-        return this.userService.getFollowingByIdentifier(currentUser.uid);
+        return this.userService.getFollowingByIdentifier(currentUser.uid).then((result) => ({
+            ...result,
+            following: toPublicUserResponses(result.following),
+        }));
     }
 
     @Get(':id/following')
     getFollowing(@Param('id') id: string) {
-        return this.userService.getFollowingByIdentifier(id);
+        return this.userService.getFollowingByIdentifier(id).then((result) => ({
+            ...result,
+            following: toPublicUserResponses(result.following),
+        }));
     }
 
     @UseGuards(FirebaseAuthGuard)
@@ -98,7 +129,7 @@ export class UserController {
 
     @Get(':id')
     findOne(@Param('id') id: string) {
-        return this.userService.findOne(id);
+        return this.userService.findOne(id).then((user) => toPublicUserResponse(user));
     }
 
     @UseGuards(FirebaseAuthGuard)
@@ -107,7 +138,12 @@ export class UserController {
         @CurrentUser() currentUser: AuthenticatedUser,
         @Body() updateUserDto: UpdateUserDto,
     ) {
-        return this.userService.updateCurrentUser(currentUser.uid, updateUserDto);
+        return this.userService
+            .updateCurrentUser(currentUser.uid, updateUserDto)
+            .then((result) => ({
+                ...result,
+                user: toSelfUserResponse(result.user),
+            }));
     }
 
     @UseGuards(FirebaseAuthGuard)
@@ -117,7 +153,10 @@ export class UserController {
         @Body() updateUserDto: UpdateUserDto,
         @CurrentUser() currentUser: AuthenticatedUser,
     ) {
-        return this.userService.update(uid, updateUserDto, currentUser.uid);
+        return this.userService.update(uid, updateUserDto, currentUser.uid).then((result) => ({
+            ...result,
+            user: toSelfUserResponse(result.user),
+        }));
     }
 
     @UseGuards(FirebaseAuthGuard)

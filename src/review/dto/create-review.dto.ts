@@ -1,7 +1,10 @@
 // src/reviews/dto/create-review.dto.ts
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsInt, IsNumber, IsOptional, IsString, IsUrl, Length, Max, Min, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsDateString, IsIn, IsInt, IsNumber, IsOptional, IsString, IsUrl, Length, Max, Min, ValidateNested } from 'class-validator';
 import { TrackHighlightDto } from './track-highlight.dto';
+import { ReviewVisibility } from '../review.entity';
+
+const LaunchReviewVisibilityValues = [ReviewVisibility.PUBLIC, ReviewVisibility.PRIVATE] as const;
 
 export class CreateReviewDto {
   @IsString()
@@ -40,6 +43,9 @@ export class CreateReviewDto {
 
   @IsOptional() @IsBoolean()
   isDraft?: boolean;
+
+  @IsOptional() @IsIn(LaunchReviewVisibilityValues)
+  visibility?: 'public' | 'private';
 
   @IsOptional() @IsDateString()
   listenedOn?: string;

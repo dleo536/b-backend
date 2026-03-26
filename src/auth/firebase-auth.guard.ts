@@ -1,10 +1,14 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from "@nestjs/common";
 import { FirebaseAdminService } from "./firebase-admin.service";
 import { AuthenticatedRequest, AuthenticatedUser } from "./auth-user.interface";
+import { AuthUserContextService } from "./auth-user-context.service";
 
 @Injectable()
 export class FirebaseAuthGuard implements CanActivate {
-    constructor(private readonly firebaseAdminService: FirebaseAdminService) {}
+    constructor(
+        private readonly firebaseAdminService: FirebaseAdminService,
+        private readonly authUserContextService: AuthUserContextService,
+    ) {}
 
     async canActivate(context: ExecutionContext): Promise<boolean> {
         const request = context.switchToHttp().getRequest<AuthenticatedRequest>();
@@ -27,7 +31,9 @@ export class FirebaseAuthGuard implements CanActivate {
         }
 
         const decodedToken = await this.firebaseAdminService.verifyIdToken(token);
-        request.user = decodedToken as AuthenticatedUser;
+        request.user = await this.authUserContextService.buildAuthenticatedUser(
+            decodedToken,
+        );
 
         return request.user;
     }

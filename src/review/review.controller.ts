@@ -6,6 +6,21 @@ import type { AuthenticatedUser } from "../auth/auth-user.interface";
 import { ReviewService } from "./review.service";
 import { CreateReviewDto } from "./dto/create-review.dto";
 import { UpdateReviewDto } from "./dto/update-review.dto";
+import { toReviewResponse, toReviewResponses } from "./review-response";
+
+const parseNonNegativeInt = (
+    value: string | undefined,
+    fallback: number,
+    max: number,
+) => {
+    const parsed = Number.parseInt(value ?? "", 10);
+
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return fallback;
+    }
+
+    return Math.min(parsed, max);
+};
 
 @Controller('reviews')
 export class ReviewController {
@@ -17,7 +32,9 @@ export class ReviewController {
         @Body() createReviewDto: CreateReviewDto,
         @CurrentUser() currentUser: AuthenticatedUser,
     ) {
-        return this.reviewService.create(createReviewDto, currentUser.uid);
+        return this.reviewService
+            .create(createReviewDto, currentUser.uid)
+            .then((review) => toReviewResponse(review));
     }
 
     @UseGuards(OptionalFirebaseAuthGuard)
@@ -31,8 +48,8 @@ export class ReviewController {
         @Query('limit') limit?: string,
         @CurrentUser() currentUser?: AuthenticatedUser,
     ) {
-        const offsetNum = offset ? parseInt(offset) : 0;
-        const limitNum = limit ? parseInt(limit) : 10;
+        const offsetNum = parseNonNegativeInt(offset, 0, 200);
+        const limitNum = parseNonNegativeInt(limit, 10, 200);
         return this.reviewService.findAll(
             userID ?? userId,
             offsetNum,
@@ -40,7 +57,10 @@ export class ReviewController {
             currentUser?.uid,
             spotifyAlbumId,
             releaseGroupMbId,
-        );
+        ).then((result) => ({
+            ...result,
+            data: toReviewResponses(result.data),
+        }));
     }
 
     @UseGuards(OptionalFirebaseAuthGuard)
@@ -49,7 +69,9 @@ export class ReviewController {
         @Param('id') id: string,
         @CurrentUser() currentUser?: AuthenticatedUser,
     ) {
-        return this.reviewService.findOne(id, currentUser?.uid);
+        return this.reviewService
+            .findOne(id, currentUser?.uid)
+            .then((review) => toReviewResponse(review));
     }
 
     @UseGuards(FirebaseAuthGuard)
@@ -59,7 +81,9 @@ export class ReviewController {
         @Body() updateReviewDto: UpdateReviewDto,
         @CurrentUser() currentUser: AuthenticatedUser,
     ) {
-        return this.reviewService.update(id, updateReviewDto, currentUser.uid);
+        return this.reviewService
+            .update(id, updateReviewDto, currentUser.uid)
+            .then((review) => toReviewResponse(review));
     }
 
     @UseGuards(FirebaseAuthGuard)

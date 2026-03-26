@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
 import { In, Repository } from "typeorm";
 import { CreateReviewDto } from "./dto/create-review.dto";
@@ -6,11 +6,10 @@ import { UpdateReviewDto } from "./dto/update-review.dto";
 import { Review, ReviewVisibility } from "./review.entity";
 import { User } from "../user/user.entity";
 import { UserFollow } from "../user/follow.entity";
+import { AuthUserContextService } from "../auth/auth-user-context.service";
 
 @Injectable()
 export class ReviewService {
-    private readonly logger = new Logger(ReviewService.name);
-
     constructor(
         @InjectRepository(Review)
         private reviewRepository: Repository<Review>,
@@ -18,6 +17,7 @@ export class ReviewService {
         private userRepository: Repository<User>,
         @InjectRepository(UserFollow)
         private followRepository: Repository<UserFollow>,
+        private readonly authUserContextService: AuthUserContextService,
     ) { }
 
     private isUuid(value: string): boolean {
@@ -80,73 +80,90 @@ export class ReviewService {
         return nextConditions;
     }
 
-    private buildReviewConditions(
-        baseConditions: Array<Record<string, unknown>>,
-        includeDrafts: boolean,
-    ) {
-        const conditions = baseConditions
-            .filter((condition) => Boolean(condition))
-            .map((condition) => (
-                includeDrafts
-                    ? { ...condition }
-                    : { ...condition, isDraft: false }
-            ));
-
-        if (conditions.length === 0) {
-            return includeDrafts ? {} : { isDraft: false };
+    private normalizeReviewVisibility(visibility?: string) {
+        if (visibility === undefined || visibility === null || visibility === "") {
+            return ReviewVisibility.PUBLIC;
         }
+
+        return visibility === ReviewVisibility.PUBLIC
+            ? ReviewVisibility.PUBLIC
+            : ReviewVisibility.PRIVATE;
+    }
+
+    private isReviewPublic(review: Review): boolean {
+        return this.normalizeReviewVisibility(review.visibility) === ReviewVisibility.PUBLIC;
+    }
+
+    private canViewReview(review: Review, viewerUserId?: string | null): boolean {
+        if (review.isDraft) {
+            return Boolean(viewerUserId) && review.userId === viewerUserId;
+        }
+
+        return this.isReviewPublic(review) || (Boolean(viewerUserId) && review.userId === viewerUserId);
+    }
+
+    private toWhereConditions(where: any): Record<string, unknown>[] {
+        if (Array.isArray(where)) {
+            return where.length > 0 ? where : [{}];
+        }
+
+        return [where ?? {}];
+    }
+
+    private dedupeWhereConditions(conditions: Record<string, unknown>[]) {
+        const serialized = new Set<string>();
+        return conditions.filter((condition) => {
+            const key = JSON.stringify(condition);
+            if (serialized.has(key)) {
+                return false;
+            }
+            serialized.add(key);
+            return true;
+        });
+    }
+
+    private buildReadableReviewWhere(
+        baseWhere: any,
+        ownerAccessUserId?: string | null,
+        includeOwnerDrafts = false,
+    ) {
+        const baseConditions = this.toWhereConditions(baseWhere);
+        const publicConditions = baseConditions.map((condition) => ({
+            ...condition,
+            isDraft: false,
+            visibility: ReviewVisibility.PUBLIC,
+        }));
+
+        if (!ownerAccessUserId) {
+            return publicConditions.length === 1 ? publicConditions[0] : publicConditions;
+        }
+
+        const ownerConditions = baseConditions.map((condition) => {
+            const nextCondition: Record<string, unknown> = {
+                ...condition,
+                userId: ownerAccessUserId,
+            };
+            delete nextCondition.firebaseUid;
+            delete nextCondition.visibility;
+            if (includeOwnerDrafts) {
+                delete nextCondition.isDraft;
+            } else {
+                nextCondition.isDraft = false;
+            }
+
+            return nextCondition;
+        });
+
+        const conditions = this.dedupeWhereConditions([
+            ...publicConditions,
+            ...ownerConditions,
+        ]);
 
         return conditions.length === 1 ? conditions[0] : conditions;
     }
 
-    private buildUserReviewWhere(
-        userIdentifier: string,
-        resolvedUserId: string | null,
-        includeDrafts: boolean,
-    ) {
-        const normalizedIdentifier = userIdentifier?.trim();
-        const baseConditions: Array<Record<string, unknown>> = [];
-
-        if (resolvedUserId) {
-            baseConditions.push({ userId: resolvedUserId });
-        }
-
-        if (normalizedIdentifier) {
-            if (this.isUuid(normalizedIdentifier)) {
-                if (normalizedIdentifier !== resolvedUserId) {
-                    baseConditions.push({ userId: normalizedIdentifier });
-                }
-            } else {
-                baseConditions.push({ firebaseUid: normalizedIdentifier });
-            }
-        }
-
-        return this.buildReviewConditions(baseConditions, includeDrafts);
-    }
-
-    private appendViewerDraftAccess(where: any, viewerUserId: string | null) {
-        if (!viewerUserId) {
-            return where;
-        }
-
-        const baseConditions = Array.isArray(where) ? where : [where];
-        const draftConditions = baseConditions.map((condition) => {
-            const normalizedCondition = { ...(condition ?? {}) };
-            delete normalizedCondition.isDraft;
-            delete normalizedCondition.userId;
-
-            return {
-                ...normalizedCondition,
-                userId: viewerUserId,
-                isDraft: true,
-            };
-        });
-
-        return [...baseConditions, ...draftConditions];
-    }
-
     private normalizeReviewForResponse(review: Review): Review {
-        review.visibility = ReviewVisibility.PUBLIC;
+        review.visibility = this.normalizeReviewVisibility(review.visibility);
 
         return review;
     }
@@ -180,6 +197,7 @@ export class ReviewService {
 
         // If creating a non-draft review, check if one already exists
         const isDraft = createReviewDto.isDraft ?? false;
+        const visibility = this.normalizeReviewVisibility(createReviewDto.visibility);
         if (!isDraft) {
             const existingReview = await this.reviewRepository.findOne({
                 where: {
@@ -211,8 +229,7 @@ export class ReviewService {
             body: createReviewDto.body,
             isSpoiler: createReviewDto.isSpoiler ?? false,
             isDraft,
-            // Launch rule: all published reviews are public.
-            visibility: ReviewVisibility.PUBLIC,
+            visibility,
             listenedOn: createReviewDto.listenedOn,
             relistenCount: createReviewDto.relistenCount ?? 0,
             trackHighlights: createReviewDto.trackHighlights,
@@ -231,25 +248,43 @@ export class ReviewService {
         spotifyAlbumId?: string,
         releaseGroupMbId?: string,
     ) {
-        // Build the query filter
         const normalizedViewerUid = viewerUid?.trim() || undefined;
         const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
         const viewerUserId = viewerUser?.id ?? null;
-        let where: any = { isDraft: false };
+        let where: any = this.buildReadableReviewWhere({}, viewerUserId, true);
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
 
         if (userID) {
             followFilterMode = "user";
             const linkedUser = await this.findUserByIdentifier(userID);
             const linkedUserId = linkedUser?.id ?? (this.isUuid(userID) ? userID : null);
-            const includeDrafts = Boolean(
-                normalizedViewerUid && (
-                    normalizedViewerUid === userID ||
-                    (viewerUserId && linkedUserId && viewerUserId === linkedUserId)
-                ),
-            );
+            const normalizedIdentifier = userID?.trim();
+            const baseConditions: Array<Record<string, unknown>> = [];
 
-            where = this.buildUserReviewWhere(userID, linkedUserId, includeDrafts);
+            if (linkedUserId) {
+                baseConditions.push({ userId: linkedUserId });
+            }
+
+            if (normalizedIdentifier) {
+                if (this.isUuid(normalizedIdentifier)) {
+                    if (normalizedIdentifier !== linkedUserId) {
+                        baseConditions.push({ userId: normalizedIdentifier });
+                    }
+                } else {
+                    baseConditions.push({ firebaseUid: normalizedIdentifier });
+                }
+            }
+
+            const ownerAccessUserId =
+                viewerUserId && linkedUserId && viewerUserId === linkedUserId
+                    ? viewerUserId
+                    : null;
+
+            where = this.buildReadableReviewWhere(
+                baseConditions,
+                ownerAccessUserId,
+                Boolean(ownerAccessUserId),
+            );
         } else if (normalizedViewerUid) {
             if (viewerUser) {
                 const follows = await this.followRepository.find({
@@ -260,19 +295,26 @@ export class ReviewService {
 
                 if (followedIds.length > 0) {
                     const followedOnlyWhere = this.appendAlbumFilter(
-                        { userId: In(followedIds), isDraft: false },
+                        this.buildReadableReviewWhere(
+                            { userId: In(followedIds) },
+                            null,
+                            false,
+                        ),
                         spotifyAlbumId,
                         releaseGroupMbId,
                     );
                     const followedOnlyCount = await this.reviewRepository.count({ where: followedOnlyWhere });
 
                     if (followedOnlyCount > 0) {
-                        const publicFeedWhere = this.appendAlbumFilter(
-                            { userId: In(filteredUserIds), isDraft: false },
+                        const filteredWhere = this.appendAlbumFilter(
+                            this.buildReadableReviewWhere(
+                                { userId: In(filteredUserIds) },
+                                viewerUser.id,
+                                true,
+                            ),
                             spotifyAlbumId,
                             releaseGroupMbId,
                         );
-                        const filteredWhere = this.appendViewerDraftAccess(publicFeedWhere, viewerUser.id);
                         const filteredTotalCount = await this.reviewRepository.count({ where: filteredWhere });
                         const reviews = await this.reviewRepository.find({
                             where: filteredWhere,
@@ -295,18 +337,10 @@ export class ReviewService {
                     followFilterMode = "global-fallback";
                 }
             } else {
-                this.logger.warn("[findAll] viewer token could not be resolved to a user profile");
             }
         }
 
         where = this.appendAlbumFilter(where, spotifyAlbumId, releaseGroupMbId);
-        if (!userID) {
-            where = this.appendViewerDraftAccess(where, viewerUserId);
-        }
-
-        this.logger.log(
-            `[findAll] userID=${userID ?? "none"} authUserId=${viewerUserId ?? "none"} mode=${followFilterMode} spotifyAlbumId=${spotifyAlbumId ?? "none"} releaseGroupMbId=${releaseGroupMbId ?? "none"} where=${JSON.stringify(where)} offset=${offset} limit=${limit}`,
-        );
 
         // Get the total count of matching reviews
         const totalCount = await this.reviewRepository.count({ where });
@@ -333,23 +367,10 @@ export class ReviewService {
 
     async findOne(id: string, viewerUid?: string) {
         const review = await this.getReviewOrThrow(id);
+        const viewerUser = await this.findUserByIdentifier(viewerUid?.trim() || undefined);
+        const viewerUserId = viewerUser?.id ?? null;
 
-        if (!review.isDraft) {
-            return this.normalizeReviewForResponse(review);
-        }
-
-        const normalizedViewerUid = viewerUid?.trim();
-        if (!normalizedViewerUid) {
-            throw new NotFoundException("Review not found");
-        }
-
-        const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
-        const isOwner = Boolean(
-            (viewerUser && viewerUser.id === review.userId) ||
-            review.firebaseUid === normalizedViewerUid,
-        );
-
-        if (!isOwner) {
+        if (!this.canViewReview(review, viewerUserId)) {
             throw new NotFoundException("Review not found");
         }
 
@@ -389,7 +410,11 @@ export class ReviewService {
             review.isSpoiler = updateReviewDto.isSpoiler;
         }
         review.isDraft = nextIsDraft;
-        review.visibility = ReviewVisibility.PUBLIC;
+        if (updateReviewDto.visibility !== undefined) {
+            review.visibility = this.normalizeReviewVisibility(updateReviewDto.visibility);
+        } else {
+            review.visibility = this.normalizeReviewVisibility(review.visibility);
+        }
         if (updateReviewDto.listenedOn !== undefined) {
             review.listenedOn = updateReviewDto.listenedOn;
         }
@@ -415,6 +440,12 @@ export class ReviewService {
         const review = await this.requireReviewAuthor(id, currentUserOauthId);
         const result = await this.reviewRepository.remove(review);
         return result;
+    }
+
+    async removeAsAdmin(id: string, currentUserOauthId: string) {
+        await this.authUserContextService.requireAdminByOauthId(currentUserOauthId);
+        const review = await this.getReviewOrThrow(id);
+        return this.reviewRepository.softRemove(review);
     }
 
     private async requireReviewAuthor(id: string, currentUserOauthId: string): Promise<Review> {

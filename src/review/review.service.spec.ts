@@ -1,11 +1,16 @@
 import { Test, TestingModule } from "@nestjs/testing";
-import { BadRequestException, NotFoundException } from "@nestjs/common";
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from "@nestjs/common";
 import { getRepositoryToken } from "@nestjs/typeorm";
 import { Repository } from "typeorm";
 import { ReviewService } from "./review.service";
 import { Review } from "./review.entity";
 import { User } from "../user/user.entity";
 import { UserFollow } from "../user/follow.entity";
+import { AuthUserContextService } from "../auth/auth-user-context.service";
 
 type MockRepository<T> = Partial<Record<keyof Repository<T>, jest.Mock>>;
 
@@ -14,6 +19,7 @@ describe("ReviewService", () => {
   let reviewRepository: MockRepository<Review>;
   let userRepository: MockRepository<User>;
   let followRepository: MockRepository<UserFollow>;
+  let authUserContextService: Partial<Record<keyof AuthUserContextService, jest.Mock>>;
 
   beforeEach(async () => {
     reviewRepository = {
@@ -23,6 +29,7 @@ describe("ReviewService", () => {
       create: jest.fn(),
       save: jest.fn(),
       remove: jest.fn(),
+      softRemove: jest.fn(),
     };
 
     userRepository = {
@@ -32,6 +39,10 @@ describe("ReviewService", () => {
 
     followRepository = {
       find: jest.fn(),
+    };
+
+    authUserContextService = {
+      requireAdminByOauthId: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -48,6 +59,10 @@ describe("ReviewService", () => {
         {
           provide: getRepositoryToken(UserFollow),
           useValue: followRepository,
+        },
+        {
+          provide: AuthUserContextService,
+          useValue: authUserContextService,
         },
       ],
     }).compile();
@@ -143,8 +158,8 @@ describe("ReviewService", () => {
     expect(result.mode).toBe("global");
     const findCall = (reviewRepository.find as jest.Mock).mock.calls[0][0];
     expect(findCall.where).toEqual([
-      { isDraft: false },
-      { userId: "11111111-1111-1111-1111-111111111111", isDraft: true },
+      { isDraft: false, visibility: "public" },
+      { userId: "11111111-1111-1111-1111-111111111111" },
     ]);
   });
 
@@ -172,10 +187,11 @@ describe("ReviewService", () => {
       "22222222-2222-2222-2222-222222222222",
     ]);
     expect(firstCountCall.where.isDraft).toBe(false);
+    expect(firstCountCall.where.visibility).toBe("public");
     const findCall = (reviewRepository.find as jest.Mock).mock.calls[0][0];
     expect(findCall.where).toEqual([
-      { isDraft: false },
-      { userId: "11111111-1111-1111-1111-111111111111", isDraft: true },
+      { isDraft: false, visibility: "public" },
+      { userId: "11111111-1111-1111-1111-111111111111" },
     ]);
   });
 
@@ -207,10 +223,10 @@ describe("ReviewService", () => {
           ]),
         }),
         isDraft: false,
+        visibility: "public",
       },
       {
         userId: "11111111-1111-1111-1111-111111111111",
-        isDraft: true,
       },
     ]);
   });
@@ -240,11 +256,11 @@ describe("ReviewService", () => {
       mode: "global",
     });
     expect(reviewRepository.count).toHaveBeenCalledWith({
-      where: { spotifyAlbumId: "spotify-album-1", isDraft: false },
+      where: { spotifyAlbumId: "spotify-album-1", isDraft: false, visibility: "public" },
     });
     expect(reviewRepository.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { spotifyAlbumId: "spotify-album-1", isDraft: false },
+        where: { spotifyAlbumId: "spotify-album-1", isDraft: false, visibility: "public" },
       }),
     );
   });
@@ -271,8 +287,17 @@ describe("ReviewService", () => {
     expect(result.data).toHaveLength(2);
     const countCall = (reviewRepository.count as jest.Mock).mock.calls[0][0];
     expect(countCall.where).toEqual([
+      {
+        userId: "33333333-3333-4333-8333-333333333333",
+        isDraft: false,
+        visibility: "public",
+      },
+      {
+        firebaseUid: "owner-uid",
+        isDraft: false,
+        visibility: "public",
+      },
       { userId: "33333333-3333-4333-8333-333333333333" },
-      { firebaseUid: "owner-uid" },
     ]);
   });
 
@@ -295,9 +320,56 @@ describe("ReviewService", () => {
 
     const countCall = (reviewRepository.count as jest.Mock).mock.calls[0][0];
     expect(countCall.where).toEqual([
-      { userId: "44444444-4444-4444-8444-444444444444", isDraft: false },
-      { firebaseUid: "other-user-uid", isDraft: false },
+      {
+        userId: "44444444-4444-4444-8444-444444444444",
+        isDraft: false,
+        visibility: "public",
+      },
+      {
+        firebaseUid: "other-user-uid",
+        isDraft: false,
+        visibility: "public",
+      },
     ]);
+  });
+
+  it("rejects direct private published review lookup for non-owners", async () => {
+    (reviewRepository.findOne as jest.Mock).mockResolvedValue({
+      id: "review-private",
+      userId: "55555555-5555-4555-8555-555555555555",
+      firebaseUid: "owner-uid",
+      isDraft: false,
+      visibility: "private",
+    });
+    (userRepository.findOne as jest.Mock).mockResolvedValue({
+      id: "66666666-6666-4666-8666-666666666666",
+      oauthId: "viewer-uid",
+    });
+
+    await expect(service.findOne("review-private", "viewer-uid")).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
+  });
+
+  it("allows owners to read their own private published reviews", async () => {
+    (reviewRepository.findOne as jest.Mock).mockResolvedValue({
+      id: "review-private",
+      userId: "77777777-7777-4777-8777-777777777777",
+      firebaseUid: "owner-uid",
+      isDraft: false,
+      visibility: "private",
+    });
+    (userRepository.findOne as jest.Mock).mockResolvedValue({
+      id: "77777777-7777-4777-8777-777777777777",
+      oauthId: "owner-uid",
+    });
+
+    await expect(service.findOne("review-private", "owner-uid")).resolves.toEqual(
+      expect.objectContaining({
+        id: "review-private",
+        visibility: "private",
+      }),
+    );
   });
 
   it("rejects direct draft lookup for non-owners", async () => {
@@ -335,5 +407,49 @@ describe("ReviewService", () => {
         isDraft: true,
       }),
     );
+  });
+
+  it("removeAsAdmin soft-deletes a review when the actor is an admin", async () => {
+    const review = {
+      id: "admin-review-1",
+      userId: "owner-user-id",
+      visibility: "public",
+      isDraft: false,
+    } as Review;
+
+    (authUserContextService.requireAdminByOauthId as jest.Mock).mockResolvedValue({
+      id: "admin-user-id",
+      oauthId: "admin-uid",
+      roles: ["admin"],
+    });
+    (reviewRepository.findOne as jest.Mock).mockResolvedValue(review);
+    (reviewRepository.softRemove as jest.Mock).mockResolvedValue({
+      ...review,
+      deletedAt: new Date("2026-03-25T00:00:00.000Z"),
+    });
+
+    const result = await service.removeAsAdmin("admin-review-1", "admin-uid");
+
+    expect(authUserContextService.requireAdminByOauthId).toHaveBeenCalledWith(
+      "admin-uid",
+    );
+    expect(reviewRepository.softRemove).toHaveBeenCalledWith(review);
+    expect(result).toEqual(
+      expect.objectContaining({
+        id: "admin-review-1",
+      }),
+    );
+  });
+
+  it("removeAsAdmin rejects non-admin callers", async () => {
+    (authUserContextService.requireAdminByOauthId as jest.Mock).mockRejectedValue(
+      new ForbiddenException("Admin access required"),
+    );
+
+    await expect(
+      service.removeAsAdmin("admin-review-2", "viewer-uid"),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    expect(reviewRepository.findOne).not.toHaveBeenCalled();
+    expect(reviewRepository.softRemove).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,7 @@
-import { ArrayMaxSize, IsArray, IsEnum, IsNotEmpty, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsIn, IsEnum, IsNotEmpty, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
 import { ListType, ListVisibility } from '../list.entity';
+
+const LaunchListVisibilityValues = [ListVisibility.PUBLIC, ListVisibility.PRIVATE] as const;
 
 export class CreateListDto {
   @IsString()
@@ -24,9 +26,9 @@ export class CreateListDto {
   @IsOptional()
   listType?: ListType;
 
-  @IsEnum(ListVisibility)
+  @IsIn(LaunchListVisibilityValues)
   @IsOptional()
-  visibility?: ListVisibility;
+  visibility?: ListVisibility.PUBLIC | ListVisibility.PRIVATE;
 
   @IsArray()
   @IsOptional()

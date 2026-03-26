@@ -5,6 +5,7 @@ import "reflect-metadata";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.getHttpAdapter().getInstance().disable("x-powered-by");
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

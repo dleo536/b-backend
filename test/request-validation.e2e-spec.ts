@@ -74,7 +74,7 @@ describe("Request validation", () => {
         {
           title: "A list",
           slug: "a-list",
-          visibility: "secret",
+          visibility: "friends",
         },
         bodyMetadata(CreateListDto),
       ),
@@ -149,7 +149,7 @@ describe("Request validation", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("rejects unsupported review visibility on create", async () => {
+  it("accepts supported private review visibility on create", async () => {
     await expect(
       pipe.transform(
         {
@@ -160,7 +160,11 @@ describe("Request validation", () => {
         },
         bodyMetadata(CreateReviewDto),
       ),
-    ).rejects.toBeInstanceOf(BadRequestException);
+    ).resolves.toEqual(
+      expect.objectContaining({
+        visibility: "private",
+      }),
+    );
   });
 
   it("rejects unsupported review visibility on update", async () => {
