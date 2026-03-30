@@ -1,7 +1,18 @@
-import { Controller, DefaultValuePipe, Get, Param, ParseIntPipe, Query } from '@nestjs/common';
+import {
+  Controller,
+  DefaultValuePipe,
+  Get,
+  Param,
+  ParseIntPipe,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
+import { FirebaseAuthGuard } from '../auth/firebase-auth.guard';
+import { SpotifyRateLimitGuard } from './spotify-rate-limit.guard';
 import { SpotifyService } from './spotify.service';
 
 @Controller('spotify')
+@UseGuards(FirebaseAuthGuard, SpotifyRateLimitGuard)
 export class SpotifyController {
   constructor(private readonly spotifyService: SpotifyService) {}
 

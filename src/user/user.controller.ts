@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from "@nestjs/common";
 import { CurrentUser } from "../auth/current-user.decorator";
+import { FirebaseAdminService } from "../auth/firebase-admin.service";
 import { FirebaseAuthGuard } from "../auth/firebase-auth.guard";
 import type { AuthenticatedUser } from "../auth/auth-user.interface";
 import { UserService } from "./user.service";
@@ -28,7 +29,10 @@ const parseNonNegativeInt = (
 
 @Controller('users')
 export class UserController {
-    constructor(private readonly userService: UserService) {}
+    constructor(
+        private readonly userService: UserService,
+        private readonly firebaseAdminService: FirebaseAdminService,
+    ) {}
 
     @UseGuards(FirebaseAuthGuard)
     @Post()
@@ -161,8 +165,16 @@ export class UserController {
 
     @UseGuards(FirebaseAuthGuard)
     @Delete("me")
-    removeMe(@CurrentUser() currentUser: AuthenticatedUser) {
-        return this.userService.removeCurrentUser(currentUser.uid);
+    async removeMe(@CurrentUser() currentUser: AuthenticatedUser) {
+        const backendUser = await this.userService.findByOauthIdOrThrow(currentUser.uid);
+
+        await this.firebaseAdminService.deleteUser(currentUser.uid);
+        await this.userService.removeCurrentUser(currentUser.uid);
+
+        return {
+            message: "Account deleted successfully",
+            id: backendUser.id,
+        };
     }
 
     @UseGuards(FirebaseAuthGuard)

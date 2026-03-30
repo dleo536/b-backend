@@ -18,10 +18,46 @@ export class FirebaseAdminService {
         const authApp = this.getInitializedApp();
 
         try {
-            return await getAuth(authApp).verifyIdToken(token);
+            return await getAuth(authApp).verifyIdToken(token, true);
         } catch (error) {
+            const authErrorCode =
+                typeof error === "object" && error !== null && "code" in error
+                    ? String((error as { code?: unknown }).code ?? "")
+                    : "";
+
+            if (authErrorCode === "auth/id-token-revoked") {
+                this.logger.warn("Firebase ID token was revoked");
+                throw new UnauthorizedException("Firebase session has been revoked. Please sign in again.");
+            }
+
+            if (authErrorCode === "auth/user-disabled") {
+                this.logger.warn("Firebase user account is disabled");
+                throw new UnauthorizedException("Firebase account is disabled");
+            }
+
             this.logger.warn("Firebase ID token verification failed");
             throw new UnauthorizedException("Invalid or expired Firebase ID token");
+        }
+    }
+
+    async deleteUser(uid: string): Promise<void> {
+        const authApp = this.getInitializedApp();
+
+        try {
+            await getAuth(authApp).deleteUser(uid);
+        } catch (error) {
+            const authErrorCode =
+                typeof error === "object" && error !== null && "code" in error
+                    ? String((error as { code?: unknown }).code ?? "")
+                    : "";
+
+            if (authErrorCode === "auth/user-not-found") {
+                this.logger.warn(`Firebase user ${uid} was already deleted`);
+                return;
+            }
+
+            this.logger.error(`Failed to delete Firebase user ${uid}`);
+            throw new InternalServerErrorException("Could not delete Firebase account");
         }
     }
 

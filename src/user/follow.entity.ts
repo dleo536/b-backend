@@ -5,12 +5,10 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryColumn,
-  Unique,
 } from "typeorm";
 import { User } from "./user.entity";
 
 @Entity("user_follows")
-@Unique("UQ_user_follows_follower_following", ["followerId", "followingId"])
 @Index("IDX_user_follows_followerId", ["followerId"])
 @Index("IDX_user_follows_followingId", ["followingId"])
 export class UserFollow {

@@ -116,17 +116,11 @@ export class UserService {
                       where: { usernameLower: normalizedUsername.toLowerCase() },
                   })
                 : null;
-        const emailUser =
-            emailValid && normalizedEmail
-                ? await this.userRepository.findOne({
-                      where: { emailLower: normalizedEmail },
-                  })
-                : null;
-
         return {
             usernameAvailable:
                 usernameValid === null ? null : Boolean(usernameValid && !usernameUser),
-            emailAvailable: emailValid === null ? null : Boolean(emailValid && !emailUser),
+            // Do not expose whether an email address is already registered.
+            emailAvailable: null,
             usernameValid,
             emailValid,
         };

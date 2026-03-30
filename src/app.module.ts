@@ -6,11 +6,10 @@ import { UserModule } from './user/user.module';
 import { ListModule } from './list/list.module';
 import { ReviewModule } from './review/review.module';
 import { SpotifyModule } from './spotify/spotify.module';
-import { DiscogsModule } from './discogs/discogs.module';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 @Module({
-  imports: [AuthModule, UserModule, ListModule, ReviewModule, SpotifyModule, DiscogsModule, ConfigModule.forRoot({ isGlobal: true }), TypeOrmModule.forRoot({
+  imports: [AuthModule, UserModule, ListModule, ReviewModule, SpotifyModule, ConfigModule.forRoot({ isGlobal: true }), TypeOrmModule.forRoot({
     type: 'postgres',
     host: process.env.DB_HOST,
     port: parseInt(process.env.DB_PORT ?? '5432'),

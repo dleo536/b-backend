@@ -35,13 +35,13 @@ $ npm install
 
 ```bash
 # development
-$ npm run start
-
-# watch mode
 $ npm run start:dev
 
+# debug mode
+$ npm run start:debug
+
 # production mode
-$ npm run start:prod
+$ npm run start
 
 # generate migration
 $  npm run typeorm:cli -- migration:generate src/migrations/InitialSchema -d src/data-source.ts

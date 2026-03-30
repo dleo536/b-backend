@@ -78,6 +78,61 @@ describe('SpotifyService', () => {
     expect(global.fetch).toHaveBeenCalledTimes(4);
   });
 
+  it('caches identical Spotify resource responses', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: 'token-123',
+            expires_in: 3600,
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: 'album-1' }), { status: 200 }),
+      );
+
+    const firstResult = await service.getAlbum('album-1');
+    const secondResult = await service.getAlbum('album-1');
+
+    expect((firstResult as any).id).toBe('album-1');
+    expect((secondResult as any).id).toBe('album-1');
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds album search query params before calling Spotify', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: 'token-123',
+            expires_in: 3600,
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            albums: {
+              items: [],
+              total: 0,
+            },
+          }),
+          { status: 200 },
+        ),
+      );
+
+    await service.searchAlbums('  test query  ', 500, -25, 'us');
+
+    const searchUrl = new URL((global.fetch as jest.Mock).mock.calls[1][0]);
+    expect(searchUrl.searchParams.get('q')).toBe('test query');
+    expect(searchUrl.searchParams.get('limit')).toBe('25');
+    expect(searchUrl.searchParams.get('offset')).toBe('0');
+    expect(searchUrl.searchParams.get('market')).toBe('US');
+  });
+
   it('throws when Spotify credentials are missing', async () => {
     delete process.env.SPOTIFY_CLIENT_ID;
     delete process.env.SPOTIFY_CLIENT_SECRET;

@@ -187,13 +187,10 @@ describe("UserService follow behavior", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("checkAvailability reports existing username and email", async () => {
+  it("checkAvailability reports username availability without exposing email existence", async () => {
     (userRepository.findOne as jest.Mock).mockImplementation(({ where }) => {
       if (where?.usernameLower === "takenname") {
         return Promise.resolve({ id: "existing-user-1" });
-      }
-      if (where?.emailLower === "taken@example.com") {
-        return Promise.resolve({ id: "existing-user-2" });
       }
       return Promise.resolve(null);
     });
@@ -202,10 +199,26 @@ describe("UserService follow behavior", () => {
 
     expect(result).toEqual({
       usernameAvailable: false,
-      emailAvailable: false,
+      emailAvailable: null,
       usernameValid: true,
       emailValid: true,
     });
+    expect(userRepository.findOne).toHaveBeenCalledTimes(1);
+    expect(userRepository.findOne).toHaveBeenCalledWith({
+      where: { usernameLower: "takenname" },
+    });
+  });
+
+  it("checkAvailability does not query the database for email-only checks", async () => {
+    const result = await service.checkAvailability(undefined, "person@example.com");
+
+    expect(result).toEqual({
+      usernameAvailable: null,
+      emailAvailable: null,
+      usernameValid: null,
+      emailValid: true,
+    });
+    expect(userRepository.findOne).not.toHaveBeenCalled();
   });
 
   it("findOne resolves a Firebase oauthId without querying the uuid id column", async () => {

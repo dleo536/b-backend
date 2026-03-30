@@ -5,13 +5,11 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryColumn,
-  Unique,
 } from "typeorm";
 import { User } from "../user/user.entity";
 import { AlbumList } from "./list.entity";
 
 @Entity("list_likes")
-@Unique("UQ_list_likes_user_list", ["userId", "listId"])
 @Index("IDX_list_likes_userId", ["userId"])
 @Index("IDX_list_likes_listId", ["listId"])
 export class ListLike {

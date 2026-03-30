@@ -10,13 +10,25 @@ type SpotifyTokenResponse = {
   expires_in?: number;
 };
 
+type SpotifyResponseCacheEntry = {
+  expiresAt: number;
+  value: unknown;
+};
+
 @Injectable()
 export class SpotifyService {
   private readonly authUrl = 'https://accounts.spotify.com/api/token';
   private readonly apiBaseUrl = 'https://api.spotify.com/v1';
+  private readonly maxSearchLimit = 25;
+  private readonly maxSearchOffset = 1000;
+  private readonly maxQueryLength = 120;
+  private readonly responseCacheTtlMs = 5 * 60 * 1000;
+  private readonly responseCacheMaxEntries = 250;
   private cachedToken: string | null = null;
   private tokenExpiresAt = 0;
   private tokenPromise: Promise<string> | null = null;
+  private readonly responseCache = new Map<string, SpotifyResponseCacheEntry>();
+  private readonly inFlightRequests = new Map<string, Promise<unknown>>();
 
   private getCredentials() {
     const clientId = process.env.SPOTIFY_CLIENT_ID?.trim();
@@ -113,7 +125,95 @@ export class SpotifyService {
     return url;
   }
 
-  private async fetchSpotifyJson<T>(
+  private getResponseCacheKey(
+    pathname: string,
+    query?: Record<string, string | number | undefined>,
+  ): string {
+    return this.buildApiUrl(pathname, query).toString();
+  }
+
+  private getCachedResponse<T>(cacheKey: string): T | undefined {
+    const now = Date.now();
+    const cachedEntry = this.responseCache.get(cacheKey);
+
+    if (!cachedEntry) {
+      return undefined;
+    }
+
+    if (cachedEntry.expiresAt <= now) {
+      this.responseCache.delete(cacheKey);
+      return undefined;
+    }
+
+    return cachedEntry.value as T;
+  }
+
+  private setCachedResponse(cacheKey: string, value: unknown) {
+    const now = Date.now();
+    this.pruneExpiredResponseCache(now);
+
+    if (this.responseCache.size >= this.responseCacheMaxEntries) {
+      const oldestKey = this.responseCache.keys().next().value;
+      if (oldestKey) {
+        this.responseCache.delete(oldestKey);
+      }
+    }
+
+    this.responseCache.set(cacheKey, {
+      value,
+      expiresAt: now + this.responseCacheTtlMs,
+    });
+  }
+
+  private pruneExpiredResponseCache(now: number) {
+    for (const [key, entry] of this.responseCache.entries()) {
+      if (entry.expiresAt <= now) {
+        this.responseCache.delete(key);
+      }
+    }
+  }
+
+  private normalizeSearchQuery(query: string): string {
+    const normalizedQuery = query?.trim();
+
+    if (!normalizedQuery) {
+      throw new BadRequestException('q is required');
+    }
+
+    return normalizedQuery.slice(0, this.maxQueryLength);
+  }
+
+  private normalizeLimit(limit = 10): number {
+    if (!Number.isFinite(limit)) {
+      return 10;
+    }
+
+    return Math.min(Math.max(Math.trunc(limit), 1), this.maxSearchLimit);
+  }
+
+  private normalizeOffset(offset = 0): number {
+    if (!Number.isFinite(offset)) {
+      return 0;
+    }
+
+    return Math.min(Math.max(Math.trunc(offset), 0), this.maxSearchOffset);
+  }
+
+  private normalizeMarket(market?: string): string | undefined {
+    const normalizedMarket = market?.trim();
+
+    if (!normalizedMarket) {
+      return undefined;
+    }
+
+    if (!/^[A-Za-z]{2}$/.test(normalizedMarket)) {
+      return undefined;
+    }
+
+    return normalizedMarket.toUpperCase();
+  }
+
+  private async fetchSpotifyJsonUncached<T>(
     pathname: string,
     query?: Record<string, string | number | undefined>,
     retry = true,
@@ -131,7 +231,7 @@ export class SpotifyService {
     if (response.status === 401 && retry) {
       this.cachedToken = null;
       this.tokenExpiresAt = 0;
-      return this.fetchSpotifyJson<T>(pathname, query, false);
+      return this.fetchSpotifyJsonUncached<T>(pathname, query, false);
     }
 
     if (!response.ok) {
@@ -144,6 +244,32 @@ export class SpotifyService {
     }
 
     return this.parseJsonResponse<T>(response);
+  }
+
+  private async fetchSpotifyJson<T>(
+    pathname: string,
+    query?: Record<string, string | number | undefined>,
+  ): Promise<T> {
+    const cacheKey = this.getResponseCacheKey(pathname, query);
+    const cachedResponse = this.getCachedResponse<T>(cacheKey);
+    if (cachedResponse !== undefined) {
+      return cachedResponse;
+    }
+
+    if (!this.inFlightRequests.has(cacheKey)) {
+      const requestPromise = this.fetchSpotifyJsonUncached<T>(pathname, query)
+        .then((result) => {
+          this.setCachedResponse(cacheKey, result);
+          return result;
+        })
+        .finally(() => {
+          this.inFlightRequests.delete(cacheKey);
+        });
+
+      this.inFlightRequests.set(cacheKey, requestPromise);
+    }
+
+    return this.inFlightRequests.get(cacheKey) as Promise<T>;
   }
 
   async getAlbum(albumId: string) {
@@ -172,29 +298,30 @@ export class SpotifyService {
     offset = 0,
     market?: string,
   ) {
-    if (!query?.trim()) {
-      throw new BadRequestException('q is required');
-    }
+    const normalizedQuery = this.normalizeSearchQuery(query);
+    const normalizedLimit = this.normalizeLimit(limit);
+    const normalizedOffset = this.normalizeOffset(offset);
+    const normalizedMarket = this.normalizeMarket(market);
 
     return this.fetchSpotifyJson('/search', {
-      q: query.trim(),
+      q: normalizedQuery,
       type: 'album',
-      limit,
-      offset,
-      market: market?.trim() || undefined,
+      limit: normalizedLimit,
+      offset: normalizedOffset,
+      market: normalizedMarket,
     });
   }
 
   async searchArtists(query: string, limit = 10, offset = 0) {
-    if (!query?.trim()) {
-      throw new BadRequestException('q is required');
-    }
+    const normalizedQuery = this.normalizeSearchQuery(query);
+    const normalizedLimit = this.normalizeLimit(limit);
+    const normalizedOffset = this.normalizeOffset(offset);
 
     return this.fetchSpotifyJson('/search', {
-      q: query.trim(),
+      q: normalizedQuery,
       type: 'artist',
-      limit,
-      offset,
+      limit: normalizedLimit,
+      offset: normalizedOffset,
     });
   }
 
