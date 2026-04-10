@@ -8,8 +8,9 @@ import { ReviewModule } from './review/review.module';
 import { SpotifyModule } from './spotify/spotify.module';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { ModerationModule } from './moderation/moderation.module';
 @Module({
-  imports: [AuthModule, UserModule, ListModule, ReviewModule, SpotifyModule, ConfigModule.forRoot({ isGlobal: true }), TypeOrmModule.forRoot({
+  imports: [AuthModule, ModerationModule, UserModule, ListModule, ReviewModule, SpotifyModule, ConfigModule.forRoot({ isGlobal: true }), TypeOrmModule.forRoot({
     type: 'postgres',
     host: process.env.DB_HOST,
     port: parseInt(process.env.DB_PORT ?? '5432'),

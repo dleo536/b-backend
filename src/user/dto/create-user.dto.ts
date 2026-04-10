@@ -23,15 +23,13 @@ export class CreateUserDto {
 
     @IsOptional() @IsUrl()
     websiteUrl?: string;
-
-
+    @IsOptional()
     @IsString()
-    @IsNotEmpty()
     @Length(1, 80)
-    firstName: string;
+    firstName?: string;
 
+    @IsOptional()
     @IsString()
-    @IsNotEmpty()
     @Length(1, 80)
-    lastName: string;
+    lastName?: string;
 }

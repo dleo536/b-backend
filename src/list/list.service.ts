@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { ArrayContains, ILike, In, Repository } from "typeorm";
+import { ArrayContains, ILike, In, Not, Repository } from "typeorm";
 import { CreateListDto } from "./dto/create-list.dto";
 import { UpdateListDto } from "./dto/update-list.dto";
 import { AlbumList, ListVisibility } from "./list.entity";
@@ -8,6 +8,7 @@ import { User } from "../user/user.entity";
 import { UserFollow } from "../user/follow.entity";
 import { ListLike } from "./list-like.entity";
 import { AuthUserContextService } from "../auth/auth-user-context.service";
+import { ModerationService } from "../moderation/moderation.service";
 
 @Injectable()
 export class ListService {
@@ -21,6 +22,7 @@ export class ListService {
         @InjectRepository(ListLike)
         private listLikeRepository: Repository<ListLike>,
         private readonly authUserContextService: AuthUserContextService,
+        private readonly moderationService: ModerationService,
     ) {}
 
     private isUuid(value: string): boolean {
@@ -205,8 +207,46 @@ export class ListService {
         };
     }
 
+    private appendExcludedOwnerIds(where: any, excludedOwnerIds: string[]) {
+        if (!excludedOwnerIds.length) {
+            return where;
+        }
+
+        const nextConditions = this.toWhereConditions(where)
+            .map((condition) => {
+                const nextCondition = condition ?? {};
+
+                if (typeof nextCondition.ownerId === "string") {
+                    return excludedOwnerIds.includes(nextCondition.ownerId)
+                        ? null
+                        : nextCondition;
+                }
+
+                if (nextCondition.ownerId !== undefined) {
+                    return nextCondition;
+                }
+
+                return {
+                    ...nextCondition,
+                    ownerId: Not(In(excludedOwnerIds)),
+                };
+            })
+            .filter((condition): condition is Record<string, unknown> => Boolean(condition));
+
+        if (nextConditions.length === 0) {
+            return { ownerId: In([]) };
+        }
+
+        return nextConditions.length === 1 ? nextConditions[0] : nextConditions;
+    }
+
     async create(createListDto: CreateListDto, currentUserOauthId: string) {
         const user = await this.requireUserByIdentifier(currentUserOauthId, "Authenticated user");
+
+        this.moderationService.assertTextFieldsAreAllowed([
+            { label: "list title", value: createListDto.title },
+            { label: "list description", value: createListDto.description },
+        ]);
 
         const albumIds =
             this.normalizeAlbumIds(createListDto.albumIds ?? createListDto.albumList) ?? [];
@@ -238,6 +278,9 @@ export class ListService {
         const normalizedViewerUid = viewerUid?.trim() || undefined;
         const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
         const viewerUserId = viewerUser?.id ?? null;
+        const excludedOwnerIds = viewerUserId
+            ? await this.moderationService.getVisibilityExcludedUserIds(viewerUserId)
+            : [];
         let where: any = {};
         let linkedUserId: string | null = null;
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
@@ -254,6 +297,15 @@ export class ListService {
                     : { firebaseUid: userID };
             }
 
+            if (linkedUserId && excludedOwnerIds.includes(linkedUserId) && linkedUserId !== viewerUserId) {
+                return {
+                    data: [],
+                    hasMore: false,
+                    totalCount: 0,
+                    mode: followFilterMode,
+                };
+            }
+
             const ownerAccessUserId =
                 viewerUserId && linkedUserId && viewerUserId === linkedUserId
                     ? viewerUserId
@@ -266,7 +318,9 @@ export class ListService {
                 const follows = await this.followRepository.find({
                     where: { followerId: viewerUser.id },
                 });
-                const followedIds = follows.map((follow) => follow.followingId);
+                const followedIds = follows
+                    .map((follow) => follow.followingId)
+                    .filter((followedId) => !excludedOwnerIds.includes(followedId));
                 const filteredOwnerIds = Array.from(new Set([...followedIds, viewerUser.id]));
 
                 if (followedIds.length > 0) {
@@ -316,13 +370,9 @@ export class ListService {
             where = this.buildReadableListWhere({ isSystem: false }, null);
         }
 
-        if (!userID) {
-            where = this.appendTitleFilter(where, title);
-            where = this.appendAlbumFilter(where, albumId);
-        } else {
-            where = this.appendTitleFilter(where, title);
-            where = this.appendAlbumFilter(where, albumId);
-        }
+        where = this.appendTitleFilter(where, title);
+        where = this.appendAlbumFilter(where, albumId);
+        where = this.appendExcludedOwnerIds(where, excludedOwnerIds);
 
         // Get the total count of matching documents
         const totalCount = await this.listRepository.count({ where });
@@ -350,6 +400,9 @@ export class ListService {
     async findByUserId(userID: string, viewerIdentifier?: string) {
         const viewer = await this.findUserByIdentifier(viewerIdentifier);
         const viewerUserId = viewer?.id ?? null;
+        const excludedOwnerIds = viewerUserId
+            ? await this.moderationService.getVisibilityExcludedUserIds(viewerUserId)
+            : [];
         let linkedUserId: string | null = null;
         let where: any;
         if (this.isUuid(userID)) {
@@ -363,11 +416,18 @@ export class ListService {
                 : { firebaseUid: userID };
         }
 
+        if (linkedUserId && excludedOwnerIds.includes(linkedUserId) && linkedUserId !== viewerUserId) {
+            return [];
+        }
+
         const ownerAccessUserId =
             viewerUserId && linkedUserId && viewerUserId === linkedUserId
                 ? viewerUserId
                 : null;
-        const readableWhere = this.buildReadableListWhere(where, ownerAccessUserId);
+        const readableWhere = this.appendExcludedOwnerIds(
+            this.buildReadableListWhere(where, ownerAccessUserId),
+            excludedOwnerIds,
+        );
 
         const lists = await this.listRepository.find({
             where: readableWhere,
@@ -386,6 +446,10 @@ export class ListService {
 
         if (!this.canViewList(list, viewerUserId)) {
             throw new NotFoundException('List not found');
+        }
+
+        if (viewerUserId && await this.moderationService.isBlockedBetweenUsersByIds(viewerUserId, list.ownerId)) {
+            throw new NotFoundException("List not found");
         }
 
         return list;
@@ -503,6 +567,11 @@ export class ListService {
         const normalizedAlbumIds = this.normalizeAlbumIds(
             updateListDto.albumIds ?? updateListDto.albumList,
         );
+
+        this.moderationService.assertTextFieldsAreAllowed([
+            { label: "list title", value: updateListDto.title },
+            { label: "list description", value: updateListDto.description },
+        ]);
 
         if (updateListDto.title !== undefined) {
             list.title = updateListDto.title;

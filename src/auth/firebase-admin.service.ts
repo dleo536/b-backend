@@ -1,6 +1,12 @@
 import { Injectable, InternalServerErrorException, Logger, UnauthorizedException } from "@nestjs/common";
 import { App, cert, getApps, initializeApp } from "firebase-admin/app";
 import { DecodedIdToken, getAuth } from "firebase-admin/auth";
+import { getStorage } from "firebase-admin/storage";
+
+type StorageObjectReference = {
+    bucketName: string;
+    objectPath: string;
+};
 
 @Injectable()
 export class FirebaseAdminService {
@@ -61,6 +67,34 @@ export class FirebaseAdminService {
         }
     }
 
+    async deleteProfileImage(uid: string, avatarUrl?: string | null): Promise<void> {
+        const normalizedUid = typeof uid === "string" ? uid.trim() : "";
+        if (!normalizedUid) {
+            return;
+        }
+
+        const storageTargets = this.getProfileImageStorageTargets(normalizedUid, avatarUrl);
+        if (storageTargets.length === 0) {
+            return;
+        }
+
+        const storage = getStorage(this.getInitializedApp());
+
+        for (const storageTarget of storageTargets) {
+            try {
+                await storage
+                    .bucket(storageTarget.bucketName)
+                    .file(storageTarget.objectPath)
+                    .delete({ ignoreNotFound: true });
+            } catch (error) {
+                this.logger.error(
+                    `Failed to delete profile image ${storageTarget.objectPath} from ${storageTarget.bucketName} for Firebase user ${normalizedUid}`,
+                );
+                throw new InternalServerErrorException("Could not delete stored profile image");
+            }
+        }
+    }
+
     private getInitializedApp(): App {
         if (!this.app) {
             throw new InternalServerErrorException(
@@ -76,6 +110,9 @@ export class FirebaseAdminService {
         const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
         const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
         const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+        const storageBucket =
+            process.env.FIREBASE_STORAGE_BUCKET?.trim() ||
+            (projectId ? `${projectId}.firebasestorage.app` : undefined);
 
         if (!projectId || !clientEmail || !privateKey) {
             return {
@@ -97,6 +134,7 @@ export class FirebaseAdminService {
                     clientEmail,
                     privateKey,
                 }),
+                storageBucket,
             });
 
             return { app, configurationError: null };
@@ -108,5 +146,104 @@ export class FirebaseAdminService {
                     "Firebase Admin credentials could not be initialized. Check FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL, and FIREBASE_PRIVATE_KEY.",
             };
         }
+    }
+
+    private getProfileImageStorageTargets(
+        uid: string,
+        avatarUrl?: string | null,
+    ): StorageObjectReference[] {
+        const storageTargets = new Map<string, StorageObjectReference>();
+        const configuredStorageBucket = this.getConfiguredStorageBucket();
+
+        if (configuredStorageBucket) {
+            const defaultProfileImagePath = `profileImages/${uid}`;
+            storageTargets.set(
+                `${configuredStorageBucket}/${defaultProfileImagePath}`,
+                {
+                    bucketName: configuredStorageBucket,
+                    objectPath: defaultProfileImagePath,
+                },
+            );
+        }
+
+        const avatarStorageReference = this.parseStorageObjectReference(avatarUrl);
+        if (avatarStorageReference) {
+            storageTargets.set(
+                `${avatarStorageReference.bucketName}/${avatarStorageReference.objectPath}`,
+                avatarStorageReference,
+            );
+        }
+
+        return Array.from(storageTargets.values());
+    }
+
+    private getConfiguredStorageBucket(): string | null {
+        const configuredBucket = this.app?.options.storageBucket;
+        if (typeof configuredBucket !== "string") {
+            return null;
+        }
+
+        const normalizedBucket = configuredBucket.trim();
+        return normalizedBucket.length > 0 ? normalizedBucket : null;
+    }
+
+    private parseStorageObjectReference(value?: string | null): StorageObjectReference | null {
+        if (typeof value !== "string") {
+            return null;
+        }
+
+        const normalizedValue = value.trim();
+        if (!normalizedValue) {
+            return null;
+        }
+
+        if (normalizedValue.startsWith("gs://")) {
+            const withoutScheme = normalizedValue.slice("gs://".length);
+            const [bucketName, ...pathParts] = withoutScheme.split("/");
+            const objectPath = decodeURIComponent(pathParts.join("/"));
+
+            if (!bucketName || !objectPath) {
+                return null;
+            }
+
+            return { bucketName, objectPath };
+        }
+
+        try {
+            const parsedUrl = new URL(normalizedValue);
+
+            if (parsedUrl.hostname === "firebasestorage.googleapis.com") {
+                const firebaseStorageMatch = parsedUrl.pathname.match(/^\/v0\/b\/([^/]+)\/o\/(.+)$/);
+                if (!firebaseStorageMatch) {
+                    return null;
+                }
+
+                const [, bucketName, encodedObjectPath] = firebaseStorageMatch;
+                return {
+                    bucketName: decodeURIComponent(bucketName),
+                    objectPath: decodeURIComponent(encodedObjectPath),
+                };
+            }
+
+            if (parsedUrl.hostname === "storage.googleapis.com") {
+                const pathSegments = parsedUrl.pathname
+                    .split("/")
+                    .filter((segment) => segment.length > 0);
+
+                if (pathSegments.length < 2) {
+                    return null;
+                }
+
+                const [bucketName, ...objectPathSegments] = pathSegments;
+                return {
+                    bucketName: decodeURIComponent(bucketName),
+                    objectPath: decodeURIComponent(objectPathSegments.join("/")),
+                };
+            }
+        } catch (error) {
+            return null;
+        }
+
+        return null;
     }
 }

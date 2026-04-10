@@ -6,11 +6,12 @@ import {
     NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { Repository, ILike, QueryFailedError } from "typeorm";
+import { Repository, ILike, In, Not, QueryFailedError } from "typeorm";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { User } from "./user.entity";
 import { UserFollow } from "./follow.entity";
+import { ModerationService } from "../moderation/moderation.service";
 
 @Injectable()
 export class UserService {
@@ -22,6 +23,7 @@ export class UserService {
         private userRepository: Repository<User>,
         @InjectRepository(UserFollow)
         private followRepository: Repository<UserFollow>,
+        private readonly moderationService: ModerationService,
     ) {}
 
     private isUuid(value: string): boolean {
@@ -43,6 +45,44 @@ export class UserService {
 
         const normalizedEmail = email.trim().toLowerCase();
         return normalizedEmail.length > 0 ? normalizedEmail : undefined;
+    }
+
+    private normalizeOptionalName(value?: string): string | undefined {
+        if (typeof value !== "string") {
+            return undefined;
+        }
+
+        const normalizedValue = value.trim();
+        return normalizedValue.length > 0 ? normalizedValue : undefined;
+    }
+
+    private buildDisplayName(firstName?: string, lastName?: string): string | undefined {
+        const displayName = [firstName, lastName]
+            .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+            .join(" ")
+            .trim();
+
+        if (!displayName) {
+            return undefined;
+        }
+
+        if (displayName.length > 120) {
+            throw new BadRequestException("Display name must be 120 characters or fewer");
+        }
+
+        return displayName;
+    }
+
+    private async findUserByIdentifier(identifier?: string): Promise<User | null> {
+        if (!identifier) {
+            return null;
+        }
+
+        if (this.isUuid(identifier)) {
+            return this.userRepository.findOne({ where: { id: identifier } });
+        }
+
+        return this.userRepository.findOne({ where: { oauthId: identifier } });
     }
 
     private validateUsername(username: string) {
@@ -157,10 +197,17 @@ export class UserService {
             }
         }
 
-        const displayName = [createUserDto.firstName, createUserDto.lastName]
-            .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-            .join(" ")
-            .trim();
+        const displayName = this.buildDisplayName(
+            this.normalizeOptionalName(createUserDto.firstName),
+            this.normalizeOptionalName(createUserDto.lastName),
+        );
+
+        this.moderationService.assertTextFieldsAreAllowed([
+            { label: "username", value: normalizedUsername },
+            { label: "display name", value: displayName || undefined },
+            { label: "bio", value: createUserDto.bio },
+            { label: "location", value: createUserDto.location },
+        ]);
 
         const user = this.userRepository.create({
             username: normalizedUsername,
@@ -188,23 +235,29 @@ export class UserService {
         }
     }
 
-    async findAll(page: number = 0, usersPerPage: number = 4, username?: string) {
+    async findAll(
+        page: number = 0,
+        usersPerPage: number = 4,
+        username?: string,
+        viewerIdentifier?: string,
+    ) {
         const skip = page * usersPerPage;
-        
+        const viewer = await this.findUserByIdentifier(viewerIdentifier);
+        const excludedUserIds = viewer?.id
+            ? await this.moderationService.getVisibilityExcludedUserIds(viewer.id)
+            : [];
+        const where: Record<string, unknown> = {};
+
         if (username) {
-            // Search for users with username matching (case-insensitive, partial match)
-            const users = await this.userRepository.find({
-                where: {
-                    username: ILike(`%${username}%`),
-                },
-                skip,
-                take: usersPerPage,
-            });
-            return users;
+            where.username = ILike(`%${username}%`);
         }
 
-        // Otherwise, paginate all users
+        if (excludedUserIds.length > 0) {
+            where.id = Not(In(excludedUserIds));
+        }
+
         const users = await this.userRepository.find({
+            where,
             skip,
             take: usersPerPage,
         });
@@ -251,11 +304,40 @@ export class UserService {
         return user;
     }
 
-    async findByUsername(username: string, offset: number = 0, limit: number = 10) {
+    async findOneVisibleToViewer(identifier: string, viewerIdentifier?: string): Promise<User> {
+        const user = await this.findOne(identifier);
+        const viewer = await this.findUserByIdentifier(viewerIdentifier);
+
+        if (viewer?.id && viewer.id !== user.id) {
+            const excludedUserIds = await this.moderationService.getVisibilityExcludedUserIds(viewer.id);
+            if (excludedUserIds.includes(user.id)) {
+                throw new NotFoundException("User not found");
+            }
+        }
+
+        return user;
+    }
+
+    async findByUsername(
+        username: string,
+        offset: number = 0,
+        limit: number = 10,
+        viewerIdentifier?: string,
+    ) {
+        const viewer = await this.findUserByIdentifier(viewerIdentifier);
+        const excludedUserIds = viewer?.id
+            ? await this.moderationService.getVisibilityExcludedUserIds(viewer.id)
+            : [];
+        const where: Record<string, unknown> = {
+            usernameLower: username.toLowerCase(),
+        };
+
+        if (excludedUserIds.length > 0) {
+            where.id = Not(In(excludedUserIds));
+        }
+
         const users = await this.userRepository.find({
-            where: {
-                usernameLower: username.toLowerCase(),
-            },
+            where,
             skip: offset,
             take: limit,
         });
@@ -303,6 +385,13 @@ export class UserService {
             user.websiteUrl = updateUserDto.websiteUrl;
         }
 
+        this.moderationService.assertTextFieldsAreAllowed([
+            { label: "username", value: updateUserDto.username },
+            { label: "display name", value: updateUserDto.displayName },
+            { label: "bio", value: updateUserDto.bio },
+            { label: "location", value: updateUserDto.location },
+        ]);
+
         try {
             const result = await this.userRepository.save(user);
             return { message: 'User updated successfully', user: result };
@@ -338,6 +427,8 @@ export class UserService {
 
         const currentUser = await this.findOne(currentUserIdentifier);
         const targetUser = await this.findOne(targetIdentifier);
+
+        await this.moderationService.assertUsersCanInteract(currentUser.id, targetUser.id);
 
         if (currentUser.id === targetUser.id) {
             throw new BadRequestException("You cannot follow yourself");
@@ -417,12 +508,20 @@ export class UserService {
         };
     }
 
-    async getFollowingByIdentifier(identifier: string) {
+    async getFollowingByIdentifier(identifier: string, viewerIdentifier?: string) {
         if (!identifier) {
             throw new BadRequestException("identifier is required");
         }
 
         const user = await this.findOne(identifier);
+        const viewer = await this.findUserByIdentifier(viewerIdentifier);
+        const excludedUserIds = viewer?.id
+            ? await this.moderationService.getVisibilityExcludedUserIds(viewer.id)
+            : [];
+
+        if (viewer?.id && viewer.id !== user.id && excludedUserIds.includes(user.id)) {
+            throw new NotFoundException("User not found");
+        }
 
         const follows = await this.followRepository.find({
             where: { followerId: user.id },
@@ -432,7 +531,8 @@ export class UserService {
 
         const followingUsers = follows
             .map((follow) => follow.following)
-            .filter((followedUser): followedUser is User => Boolean(followedUser));
+            .filter((followedUser): followedUser is User => Boolean(followedUser))
+            .filter((followedUser) => !excludedUserIds.includes(followedUser.id));
 
         const followingIds = followingUsers.map((followedUser) => followedUser.id);
 
@@ -458,6 +558,16 @@ export class UserService {
             return {
                 following: false,
                 isSelf: true,
+                followerId: currentUser.id,
+                followingId: targetUser.id,
+            };
+        }
+
+        if (await this.moderationService.isBlockedBetweenUsersByIds(currentUser.id, targetUser.id)) {
+            return {
+                following: false,
+                blocked: true,
+                isSelf: false,
                 followerId: currentUser.id,
                 followingId: targetUser.id,
             };

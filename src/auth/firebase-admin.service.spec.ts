@@ -3,12 +3,23 @@ import { FirebaseAdminService } from "./firebase-admin.service";
 
 const mockVerifyIdToken = jest.fn();
 const mockDeleteUser = jest.fn();
+const mockDeleteStorageFile = jest.fn();
+const mockStorageFile = jest.fn(() => ({
+    delete: mockDeleteStorageFile,
+}));
+const mockStorageBucket = jest.fn(() => ({
+    file: mockStorageFile,
+}));
+const mockGetStorage = jest.fn(() => ({
+    bucket: mockStorageBucket,
+}));
 const mockGetAuth = jest.fn(() => ({
     verifyIdToken: mockVerifyIdToken,
     deleteUser: mockDeleteUser,
 }));
-const mockInitializeApp = jest.fn(() => ({
+const mockInitializeApp = jest.fn((options?: Record<string, unknown>) => ({
     name: "test-app",
+    options: options ?? {},
 }));
 const mockGetApps = jest.fn(() => []);
 const mockCert = jest.fn((value) => value);
@@ -23,6 +34,10 @@ jest.mock("firebase-admin/auth", () => ({
     getAuth: (...args: unknown[]) => mockGetAuth(...args),
 }));
 
+jest.mock("firebase-admin/storage", () => ({
+    getStorage: (...args: unknown[]) => mockGetStorage(...args),
+}));
+
 describe("FirebaseAdminService", () => {
     const originalEnv = process.env;
 
@@ -32,9 +47,14 @@ describe("FirebaseAdminService", () => {
             FIREBASE_PROJECT_ID: "test-project-id",
             FIREBASE_CLIENT_EMAIL: "firebase-admin@example.com",
             FIREBASE_PRIVATE_KEY: "-----BEGIN PRIVATE KEY-----\\nabc123\\n-----END PRIVATE KEY-----\\n",
+            FIREBASE_STORAGE_BUCKET: "test-project-id.firebasestorage.app",
         };
         mockVerifyIdToken.mockReset();
         mockDeleteUser.mockReset();
+        mockDeleteStorageFile.mockReset();
+        mockStorageFile.mockClear();
+        mockStorageBucket.mockClear();
+        mockGetStorage.mockClear();
         mockGetAuth.mockClear();
         mockInitializeApp.mockClear();
         mockGetApps.mockReset();
@@ -99,6 +119,43 @@ describe("FirebaseAdminService", () => {
         const service = new FirebaseAdminService();
 
         await expect(service.deleteUser("firebase-uid-1")).rejects.toBeInstanceOf(
+            InternalServerErrorException,
+        );
+    });
+
+    it("deletes the stored profile image for the user from Firebase Storage", async () => {
+        mockDeleteStorageFile.mockResolvedValue(undefined);
+
+        const service = new FirebaseAdminService();
+        await service.deleteProfileImage("firebase-uid-1");
+
+        expect(mockGetStorage).toHaveBeenCalled();
+        expect(mockStorageBucket).toHaveBeenCalledWith("test-project-id.firebasestorage.app");
+        expect(mockStorageFile).toHaveBeenCalledWith("profileImages/firebase-uid-1");
+        expect(mockDeleteStorageFile).toHaveBeenCalledWith({ ignoreNotFound: true });
+    });
+
+    it("deletes a Firebase Storage object referenced by the stored avatar URL", async () => {
+        mockDeleteStorageFile.mockResolvedValue(undefined);
+
+        const service = new FirebaseAdminService();
+        await service.deleteProfileImage(
+            "firebase-uid-1",
+            "https://firebasestorage.googleapis.com/v0/b/custom-bucket/o/profileImages%2Ffirebase-uid-1%2Fthumb.png?alt=media",
+        );
+
+        expect(mockStorageBucket).toHaveBeenNthCalledWith(1, "test-project-id.firebasestorage.app");
+        expect(mockStorageFile).toHaveBeenNthCalledWith(1, "profileImages/firebase-uid-1");
+        expect(mockStorageBucket).toHaveBeenNthCalledWith(2, "custom-bucket");
+        expect(mockStorageFile).toHaveBeenNthCalledWith(2, "profileImages/firebase-uid-1/thumb.png");
+    });
+
+    it("throws when Firebase Storage cleanup fails unexpectedly", async () => {
+        mockDeleteStorageFile.mockRejectedValue(new Error("storage unavailable"));
+
+        const service = new FirebaseAdminService();
+
+        await expect(service.deleteProfileImage("firebase-uid-1")).rejects.toBeInstanceOf(
             InternalServerErrorException,
         );
     });

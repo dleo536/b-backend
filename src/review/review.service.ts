@@ -1,12 +1,13 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, Not, Repository } from "typeorm";
 import { CreateReviewDto } from "./dto/create-review.dto";
 import { UpdateReviewDto } from "./dto/update-review.dto";
 import { Review, ReviewVisibility } from "./review.entity";
 import { User } from "../user/user.entity";
 import { UserFollow } from "../user/follow.entity";
 import { AuthUserContextService } from "../auth/auth-user-context.service";
+import { ModerationService } from "../moderation/moderation.service";
 
 @Injectable()
 export class ReviewService {
@@ -18,6 +19,7 @@ export class ReviewService {
         @InjectRepository(UserFollow)
         private followRepository: Repository<UserFollow>,
         private readonly authUserContextService: AuthUserContextService,
+        private readonly moderationService: ModerationService,
     ) { }
 
     private isUuid(value: string): boolean {
@@ -172,6 +174,39 @@ export class ReviewService {
         return reviews.map((review) => this.normalizeReviewForResponse(review));
     }
 
+    private appendExcludedUserIds(where: any, excludedUserIds: string[]) {
+        if (!excludedUserIds.length) {
+            return where;
+        }
+
+        const nextConditions = this.toWhereConditions(where)
+            .map((condition) => {
+                const nextCondition = condition ?? {};
+
+                if (typeof nextCondition.userId === "string") {
+                    return excludedUserIds.includes(nextCondition.userId)
+                        ? null
+                        : nextCondition;
+                }
+
+                if (nextCondition.userId !== undefined) {
+                    return nextCondition;
+                }
+
+                return {
+                    ...nextCondition,
+                    userId: Not(In(excludedUserIds)),
+                };
+            })
+            .filter((condition): condition is Record<string, unknown> => Boolean(condition));
+
+        if (nextConditions.length === 0) {
+            return { userId: In([]) };
+        }
+
+        return nextConditions.length === 1 ? nextConditions[0] : nextConditions;
+    }
+
     private async getReviewOrThrow(id: string): Promise<Review> {
         const review = await this.reviewRepository.findOne({
             where: { id },
@@ -194,6 +229,12 @@ export class ReviewService {
         if (!user) {
             throw new NotFoundException("Authenticated user profile not found");
         }
+
+        this.moderationService.assertTextFieldsAreAllowed([
+            { label: "review headline", value: createReviewDto.headline },
+            { label: "review body", value: createReviewDto.body },
+            { label: "review tags", value: createReviewDto.tags?.join(" ") },
+        ]);
 
         // If creating a non-draft review, check if one already exists
         const isDraft = createReviewDto.isDraft ?? false;
@@ -251,6 +292,9 @@ export class ReviewService {
         const normalizedViewerUid = viewerUid?.trim() || undefined;
         const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
         const viewerUserId = viewerUser?.id ?? null;
+        const excludedUserIds = viewerUserId
+            ? await this.moderationService.getVisibilityExcludedUserIds(viewerUserId)
+            : [];
         let where: any = this.buildReadableReviewWhere({}, viewerUserId, true);
         let followFilterMode: "global" | "following" | "global-fallback" | "user" = "global";
 
@@ -258,6 +302,14 @@ export class ReviewService {
             followFilterMode = "user";
             const linkedUser = await this.findUserByIdentifier(userID);
             const linkedUserId = linkedUser?.id ?? (this.isUuid(userID) ? userID : null);
+            if (linkedUserId && excludedUserIds.includes(linkedUserId) && linkedUserId !== viewerUserId) {
+                return {
+                    data: [],
+                    hasMore: false,
+                    totalCount: 0,
+                    mode: followFilterMode,
+                };
+            }
             const normalizedIdentifier = userID?.trim();
             const baseConditions: Array<Record<string, unknown>> = [];
 
@@ -290,7 +342,9 @@ export class ReviewService {
                 const follows = await this.followRepository.find({
                     where: { followerId: viewerUser.id },
                 });
-                const followedIds = follows.map((follow) => follow.followingId);
+                const followedIds = follows
+                    .map((follow) => follow.followingId)
+                    .filter((followedId) => !excludedUserIds.includes(followedId));
                 const filteredUserIds = Array.from(new Set([...followedIds, viewerUser.id]));
 
                 if (followedIds.length > 0) {
@@ -341,6 +395,7 @@ export class ReviewService {
         }
 
         where = this.appendAlbumFilter(where, spotifyAlbumId, releaseGroupMbId);
+        where = this.appendExcludedUserIds(where, excludedUserIds);
 
         // Get the total count of matching reviews
         const totalCount = await this.reviewRepository.count({ where });
@@ -374,12 +429,22 @@ export class ReviewService {
             throw new NotFoundException("Review not found");
         }
 
+        if (viewerUserId && await this.moderationService.isBlockedBetweenUsersByIds(viewerUserId, review.userId)) {
+            throw new NotFoundException("Review not found");
+        }
+
         return this.normalizeReviewForResponse(review);
     }
 
     async update(id: string, updateReviewDto: UpdateReviewDto, currentUserOauthId: string) {
         const review = await this.requireReviewAuthor(id, currentUserOauthId);
         const nextIsDraft = updateReviewDto.isDraft ?? review.isDraft;
+
+        this.moderationService.assertTextFieldsAreAllowed([
+            { label: "review headline", value: updateReviewDto.headline },
+            { label: "review body", value: updateReviewDto.body },
+            { label: "review tags", value: updateReviewDto.tags?.join(" ") },
+        ]);
 
         if (!nextIsDraft) {
             const existingPublishedReview = await this.reviewRepository.findOne({
