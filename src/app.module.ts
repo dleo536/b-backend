@@ -9,6 +9,7 @@ import { SpotifyModule } from './spotify/spotify.module';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ModerationModule } from './moderation/moderation.module';
+
 @Module({
   imports: [AuthModule, ModerationModule, UserModule, ListModule, ReviewModule, SpotifyModule, ConfigModule.forRoot({ isGlobal: true }), TypeOrmModule.forRoot({
     type: 'postgres',
@@ -18,6 +19,8 @@ import { ModerationModule } from './moderation/moderation.module';
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     entities: [__dirname + '/**/*.entity{.ts,.js}'],
+    migrations: [__dirname + '/migrations/*{.ts,.js}'],
+    migrationsRun: true,
     synchronize: false, // Disabled - use migrations for schema changes (recommended for production)
   })],
   controllers: [AppController],

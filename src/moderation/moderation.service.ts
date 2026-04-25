@@ -3,10 +3,11 @@ import {
     ConflictException,
     ForbiddenException,
     Injectable,
+    Logger,
     NotFoundException,
 } from "@nestjs/common";
 import { InjectRepository } from "@nestjs/typeorm";
-import { In, Repository } from "typeorm";
+import { In, QueryFailedError, Repository } from "typeorm";
 import {
     ContentReport,
     ReportReason,
@@ -46,6 +47,7 @@ const normalizeModerationText = (value: string) =>
 
 @Injectable()
 export class ModerationService {
+    private readonly logger = new Logger(ModerationService.name);
     private readonly blockedTerms: string[];
 
     constructor(
@@ -133,6 +135,21 @@ export class ModerationService {
         });
     }
 
+    private isMissingRelationError(error: unknown, relationName: string): boolean {
+        if (!(error instanceof QueryFailedError)) {
+            return false;
+        }
+
+        const driverError = error as QueryFailedError & {
+            driverError?: { code?: string; message?: string };
+        };
+
+        return (
+            driverError.driverError?.code === "42P01" &&
+            driverError.driverError?.message?.includes(`relation "${relationName}" does not exist`) === true
+        );
+    }
+
     assertTextFieldsAreAllowed(fields: Array<{ label: string; value?: string | null }>) {
         for (const field of fields) {
             if (!field?.label) {
@@ -152,9 +169,21 @@ export class ModerationService {
             return [];
         }
 
-        const blocks = await this.userBlockRepository.find({
-            where: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }],
-        });
+        let blocks: UserBlock[];
+        try {
+            blocks = await this.userBlockRepository.find({
+                where: [{ blockerId: viewerUserId }, { blockedId: viewerUserId }],
+            });
+        } catch (error) {
+            if (this.isMissingRelationError(error, "user_blocks")) {
+                this.logger.warn(
+                    'Skipping visibility exclusions because relation "user_blocks" is missing. Run pending migrations.',
+                );
+                return [];
+            }
+
+            throw error;
+        }
 
         return Array.from(
             new Set(
@@ -173,12 +202,24 @@ export class ModerationService {
             return false;
         }
 
-        const block = await this.userBlockRepository.findOne({
-            where: [
-                { blockerId: leftUserId, blockedId: rightUserId },
-                { blockerId: rightUserId, blockedId: leftUserId },
-            ],
-        });
+        let block: UserBlock | null;
+        try {
+            block = await this.userBlockRepository.findOne({
+                where: [
+                    { blockerId: leftUserId, blockedId: rightUserId },
+                    { blockerId: rightUserId, blockedId: leftUserId },
+                ],
+            });
+        } catch (error) {
+            if (this.isMissingRelationError(error, "user_blocks")) {
+                this.logger.warn(
+                    'Skipping block lookup because relation "user_blocks" is missing. Run pending migrations.',
+                );
+                return false;
+            }
+
+            throw error;
+        }
 
         return Boolean(block);
     }
