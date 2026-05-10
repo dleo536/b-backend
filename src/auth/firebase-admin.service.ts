@@ -1,4 +1,11 @@
-import { Injectable, InternalServerErrorException, Logger, UnauthorizedException } from "@nestjs/common";
+import {
+    BadRequestException,
+    Injectable,
+    InternalServerErrorException,
+    Logger,
+    NotFoundException,
+    UnauthorizedException,
+} from "@nestjs/common";
 import { App, cert, getApps, initializeApp } from "firebase-admin/app";
 import { DecodedIdToken, getAuth } from "firebase-admin/auth";
 import { getStorage } from "firebase-admin/storage";
@@ -64,6 +71,31 @@ export class FirebaseAdminService {
 
             this.logger.error(`Failed to delete Firebase user ${uid}`);
             throw new InternalServerErrorException("Could not delete Firebase account");
+        }
+    }
+
+    async updateUserPassword(uid: string, password: string): Promise<void> {
+        const authApp = this.getInitializedApp();
+
+        try {
+            await getAuth(authApp).updateUser(uid, { password });
+        } catch (error) {
+            const authErrorCode =
+                typeof error === "object" && error !== null && "code" in error
+                    ? String((error as { code?: unknown }).code ?? "")
+                    : "";
+
+            if (authErrorCode === "auth/user-not-found") {
+                this.logger.warn(`Firebase user ${uid} was not found for password update`);
+                throw new NotFoundException("Account not found");
+            }
+
+            if (authErrorCode === "auth/invalid-password") {
+                throw new BadRequestException("Password does not meet the required rules");
+            }
+
+            this.logger.error(`Failed to update Firebase password for user ${uid}`);
+            throw new InternalServerErrorException("Could not update Firebase password");
         }
     }
 

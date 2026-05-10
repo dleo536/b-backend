@@ -9,6 +9,7 @@ import { UserService } from "./user.service";
 import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { CheckAvailabilityDto } from "./dto/check-availability.dto";
+import { ChangePasswordDto } from "./dto/change-password.dto";
 import {
     toPublicUserResponse,
     toPublicUserResponses,
@@ -190,6 +191,23 @@ export class UserController {
                 ...result,
                 user: toSelfUserResponse(result.user),
             }));
+    }
+
+    @UseGuards(FirebaseAuthGuard)
+    @Post("me/change-password")
+    async changeMyPassword(
+        @CurrentUser() currentUser: AuthenticatedUser,
+        @Body() changePasswordDto: ChangePasswordDto,
+    ) {
+        await this.userService.findByOauthIdOrThrow(currentUser.uid);
+        await this.firebaseAdminService.updateUserPassword(
+            currentUser.uid,
+            changePasswordDto.newPassword,
+        );
+
+        return {
+            message: "Password updated successfully",
+        };
     }
 
     @UseGuards(FirebaseAuthGuard)

@@ -41,3 +41,36 @@ describe("UserController account deletion", () => {
         });
     });
 });
+
+describe("UserController change password", () => {
+    it("updates the authenticated user's Firebase password", async () => {
+        const userService = {
+            findByOauthIdOrThrow: jest.fn().mockResolvedValue({
+                id: "backend-user-id",
+            }),
+        };
+        const firebaseAdminService = {
+            updateUserPassword: jest.fn().mockResolvedValue(undefined),
+        };
+        const moderationService = {} as any;
+        const controller = new UserController(
+            userService as any,
+            firebaseAdminService as any,
+            moderationService,
+        );
+
+        const result = await controller.changeMyPassword(
+            { uid: "firebase-uid-1" } as any,
+            { newPassword: "NewPassword1" },
+        );
+
+        expect(userService.findByOauthIdOrThrow).toHaveBeenCalledWith("firebase-uid-1");
+        expect(firebaseAdminService.updateUserPassword).toHaveBeenCalledWith(
+            "firebase-uid-1",
+            "NewPassword1",
+        );
+        expect(result).toEqual({
+            message: "Password updated successfully",
+        });
+    });
+});
