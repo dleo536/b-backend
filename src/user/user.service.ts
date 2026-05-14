@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from "@nestjs/typeorm";
 import { Repository, ILike, In, Not, QueryFailedError } from "typeorm";
 import { CreateUserDto } from "./dto/create-user.dto";
+import { CompleteOnboardingDetailsDto } from "./dto/complete-onboarding-details.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { User } from "./user.entity";
 import { UserFollow } from "./follow.entity";
@@ -17,6 +18,7 @@ import { ModerationService } from "../moderation/moderation.service";
 export class UserService {
     private readonly emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
     private readonly usernameRegex = /^[A-Za-z0-9._]+$/;
+    private readonly minimumAllowedAge = 13;
 
     constructor(
         @InjectRepository(User)
@@ -54,6 +56,128 @@ export class UserService {
 
         const normalizedValue = value.trim();
         return normalizedValue.length > 0 ? normalizedValue : undefined;
+    }
+
+    private normalizeOptionalText(value?: string): string | undefined {
+        if (typeof value !== "string") {
+            return undefined;
+        }
+
+        const normalizedValue = value.trim();
+        return normalizedValue.length > 0 ? normalizedValue : undefined;
+    }
+
+    private normalizeRequiredText(
+        value: string | undefined,
+        label: string,
+        maxLength: number,
+    ): string {
+        const normalizedValue = this.normalizeOptionalText(value);
+        if (!normalizedValue) {
+            throw new BadRequestException(`${label} is required`);
+        }
+        if (normalizedValue.length > maxLength) {
+            throw new BadRequestException(`${label} must be ${maxLength} characters or fewer`);
+        }
+
+        return normalizedValue;
+    }
+
+    private normalizeOptionalBio(value?: string): string | undefined {
+        const normalizedValue = this.normalizeOptionalText(value);
+        if (!normalizedValue) {
+            return undefined;
+        }
+        if (normalizedValue.length > 160) {
+            throw new BadRequestException("Bio must be 160 characters or fewer");
+        }
+
+        return normalizedValue;
+    }
+
+    private normalizeDateOfBirth(value?: string): string | undefined {
+        if (typeof value !== "string") {
+            return undefined;
+        }
+
+        const normalizedValue = value.trim();
+        return normalizedValue.length > 0 ? normalizedValue : undefined;
+    }
+
+    private parseDateOfBirth(dateOfBirth: string): Date {
+        const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateOfBirth);
+        if (!match) {
+            throw new BadRequestException("Date of birth must be a valid date");
+        }
+
+        const year = Number.parseInt(match[1], 10);
+        const month = Number.parseInt(match[2], 10);
+        const day = Number.parseInt(match[3], 10);
+        const parsedDate = new Date(Date.UTC(year, month - 1, day));
+
+        if (
+            Number.isNaN(parsedDate.getTime()) ||
+            parsedDate.getUTCFullYear() !== year ||
+            parsedDate.getUTCMonth() !== month - 1 ||
+            parsedDate.getUTCDate() !== day
+        ) {
+            throw new BadRequestException("Date of birth must be a valid date");
+        }
+
+        return parsedDate;
+    }
+
+    private validateDateOfBirth(dateOfBirth?: string) {
+        if (!dateOfBirth) {
+            return;
+        }
+
+        const parsedDate = this.parseDateOfBirth(dateOfBirth);
+        const today = new Date();
+        const currentUtcDate = new Date(
+            Date.UTC(
+                today.getUTCFullYear(),
+                today.getUTCMonth(),
+                today.getUTCDate(),
+            ),
+        );
+
+        if (parsedDate > currentUtcDate) {
+            throw new BadRequestException("Date of birth must be in the past");
+        }
+
+        let age = currentUtcDate.getUTCFullYear() - parsedDate.getUTCFullYear();
+        const birthdayHasPassedThisYear =
+            currentUtcDate.getUTCMonth() > parsedDate.getUTCMonth() ||
+            (
+                currentUtcDate.getUTCMonth() === parsedDate.getUTCMonth() &&
+                currentUtcDate.getUTCDate() >= parsedDate.getUTCDate()
+            );
+
+        if (!birthdayHasPassedThisYear) {
+            age -= 1;
+        }
+
+        if (age < this.minimumAllowedAge) {
+            throw new BadRequestException(
+                "b.sides is only available to users age 13 and older",
+            );
+        }
+    }
+
+    private applyOnboardingFields(
+        user: User,
+        fields: {
+            bio?: string;
+            dateOfBirth?: string;
+            country?: string;
+            city?: string;
+        },
+    ) {
+        user.bio = fields.bio;
+        user.dateOfBirth = fields.dateOfBirth;
+        user.country = fields.country;
+        user.city = fields.city;
     }
 
     private buildDisplayName(firstName?: string, lastName?: string): string | undefined {
@@ -201,11 +325,19 @@ export class UserService {
             this.normalizeOptionalName(createUserDto.firstName),
             this.normalizeOptionalName(createUserDto.lastName),
         );
+        const normalizedBio = this.normalizeOptionalBio(createUserDto.bio);
+        const normalizedDateOfBirth = this.normalizeDateOfBirth(createUserDto.dateOfBirth);
+        const normalizedCountry = this.normalizeOptionalText(createUserDto.country);
+        const normalizedCity = this.normalizeOptionalText(createUserDto.city);
+
+        this.validateDateOfBirth(normalizedDateOfBirth);
 
         this.moderationService.assertTextFieldsAreAllowed([
             { label: "username", value: normalizedUsername },
             { label: "display name", value: displayName || undefined },
-            { label: "bio", value: createUserDto.bio },
+            { label: "bio", value: normalizedBio },
+            { label: "country", value: normalizedCountry },
+            { label: "city", value: normalizedCity },
             { label: "location", value: createUserDto.location },
         ]);
 
@@ -216,7 +348,10 @@ export class UserService {
             emailLower: normalizedEmail,
             oauthId,
             displayName: displayName || undefined,
-            bio: createUserDto.bio,
+            bio: normalizedBio,
+            dateOfBirth: normalizedDateOfBirth,
+            country: normalizedCountry,
+            city: normalizedCity,
             avatarUrl: createUserDto.avatarUrl,
             bannerUrl: createUserDto.bannerUrl,
             location: createUserDto.location,
@@ -349,10 +484,71 @@ export class UserService {
         return this.update(currentUserOauthId, updateUserDto, currentUserOauthId);
     }
 
+    async updateOnboardingDetails(
+        currentUserOauthId: string,
+        completeOnboardingDetailsDto: CompleteOnboardingDetailsDto,
+    ) {
+        const user = await this.findByOauthIdOrThrow(currentUserOauthId);
+        const normalizedBio = this.normalizeOptionalBio(completeOnboardingDetailsDto.bio);
+        const normalizedDateOfBirth = this.normalizeDateOfBirth(
+            completeOnboardingDetailsDto.dateOfBirth,
+        );
+
+        if (!normalizedDateOfBirth) {
+            throw new BadRequestException("Date of birth is required");
+        }
+
+        const normalizedCountry = this.normalizeRequiredText(
+            completeOnboardingDetailsDto.country,
+            "Country",
+            80,
+        );
+        const normalizedCity = this.normalizeRequiredText(
+            completeOnboardingDetailsDto.city,
+            "City",
+            120,
+        );
+
+        this.validateDateOfBirth(normalizedDateOfBirth);
+        this.moderationService.assertTextFieldsAreAllowed([
+            { label: "bio", value: normalizedBio },
+            { label: "country", value: normalizedCountry },
+            { label: "city", value: normalizedCity },
+        ]);
+
+        this.applyOnboardingFields(user, {
+            bio: normalizedBio,
+            dateOfBirth: normalizedDateOfBirth,
+            country: normalizedCountry,
+            city: normalizedCity,
+        });
+        user.onboardingStep = Math.max(user.onboardingStep ?? 0, 1);
+
+        const result = await this.userRepository.save(user);
+        return {
+            message: "Onboarding details updated successfully",
+            user: result,
+        };
+    }
+
     async update(identifier: string, updateUserDto: UpdateUserDto, currentUserOauthId: string) {
         const currentUser = await this.findByOauthIdOrThrow(currentUserOauthId);
         const user = await this.findOne(identifier);
         this.ensureCanManageUser(currentUser, user);
+        const normalizedBio = updateUserDto.bio !== undefined
+            ? this.normalizeOptionalBio(updateUserDto.bio)
+            : undefined;
+        const normalizedDateOfBirth = updateUserDto.dateOfBirth !== undefined
+            ? this.normalizeDateOfBirth(updateUserDto.dateOfBirth)
+            : undefined;
+        const normalizedCountry = updateUserDto.country !== undefined
+            ? this.normalizeOptionalText(updateUserDto.country)
+            : undefined;
+        const normalizedCity = updateUserDto.city !== undefined
+            ? this.normalizeOptionalText(updateUserDto.city)
+            : undefined;
+
+        this.validateDateOfBirth(normalizedDateOfBirth);
         let normalizedUsername: string | undefined;
         
         // Update usernameLower if username is being updated
@@ -370,7 +566,16 @@ export class UserService {
             user.displayName = updateUserDto.displayName;
         }
         if (updateUserDto.bio !== undefined) {
-            user.bio = updateUserDto.bio;
+            user.bio = normalizedBio;
+        }
+        if (updateUserDto.dateOfBirth !== undefined) {
+            user.dateOfBirth = normalizedDateOfBirth;
+        }
+        if (updateUserDto.country !== undefined) {
+            user.country = normalizedCountry;
+        }
+        if (updateUserDto.city !== undefined) {
+            user.city = normalizedCity;
         }
         if (updateUserDto.avatarUrl !== undefined) {
             user.avatarUrl = updateUserDto.avatarUrl;
@@ -388,7 +593,9 @@ export class UserService {
         this.moderationService.assertTextFieldsAreAllowed([
             { label: "username", value: updateUserDto.username },
             { label: "display name", value: updateUserDto.displayName },
-            { label: "bio", value: updateUserDto.bio },
+            { label: "bio", value: normalizedBio },
+            { label: "country", value: normalizedCountry },
+            { label: "city", value: normalizedCity },
             { label: "location", value: updateUserDto.location },
         ]);
 

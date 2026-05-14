@@ -10,6 +10,7 @@ import { CreateUserDto } from "./dto/create-user.dto";
 import { UpdateUserDto } from "./dto/update-user.dto";
 import { CheckAvailabilityDto } from "./dto/check-availability.dto";
 import { ChangePasswordDto } from "./dto/change-password.dto";
+import { CompleteOnboardingDetailsDto } from "./dto/complete-onboarding-details.dto";
 import {
     toPublicUserResponse,
     toPublicUserResponses,
@@ -187,6 +188,20 @@ export class UserController {
     ) {
         return this.userService
             .updateCurrentUser(currentUser.uid, updateUserDto)
+            .then((result) => ({
+                ...result,
+                user: toSelfUserResponse(result.user),
+            }));
+    }
+
+    @UseGuards(FirebaseAuthGuard)
+    @Patch("me/onboarding-details")
+    updateMyOnboardingDetails(
+        @CurrentUser() currentUser: AuthenticatedUser,
+        @Body() completeOnboardingDetailsDto: CompleteOnboardingDetailsDto,
+    ) {
+        return this.userService
+            .updateOnboardingDetails(currentUser.uid, completeOnboardingDetailsDto)
             .then((result) => ({
                 ...result,
                 user: toSelfUserResponse(result.user),

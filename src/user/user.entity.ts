@@ -88,6 +88,15 @@ export class User {
   @Column({ type: 'text', nullable: true })
   bio?: string;
 
+  @Column({ type: 'date', nullable: true })
+  dateOfBirth?: string;
+
+  @Column({ type: 'varchar', length: 80, nullable: true })
+  country?: string;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  city?: string;
+
   @Column({ type: 'varchar', length: 255, nullable: true })
   avatarUrl?: string;
 

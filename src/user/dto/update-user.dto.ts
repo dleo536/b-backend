@@ -1,4 +1,11 @@
-import { IsOptional, IsString, IsUrl, Length, MaxLength } from "class-validator";
+import {
+    IsDateString,
+    IsOptional,
+    IsString,
+    IsUrl,
+    Length,
+    MaxLength,
+} from "class-validator";
 
 export class UpdateUserDto {
     @IsString()
@@ -13,8 +20,22 @@ export class UpdateUserDto {
 
     @IsString()
     @IsOptional()
-    @MaxLength(500)
+    @MaxLength(160)
     bio?: string;
+
+    @IsOptional()
+    @IsDateString()
+    dateOfBirth?: string;
+
+    @IsString()
+    @IsOptional()
+    @Length(1, 80)
+    country?: string;
+
+    @IsString()
+    @IsOptional()
+    @Length(1, 120)
+    city?: string;
 
     @IsOptional()
     @IsUrl()

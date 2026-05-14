@@ -5,6 +5,7 @@ import { Repository } from "typeorm";
 import { UserService } from "./user.service";
 import { User } from "./user.entity";
 import { UserFollow } from "./follow.entity";
+import { ModerationService } from "../moderation/moderation.service";
 
 type MockRepository<T> = Partial<Record<keyof Repository<T>, jest.Mock>>;
 
@@ -12,6 +13,11 @@ describe("UserService follow behavior", () => {
   let service: UserService;
   let userRepository: MockRepository<User>;
   let followRepository: MockRepository<UserFollow>;
+  let moderationService: {
+    assertTextFieldsAreAllowed: jest.Mock;
+    assertUsersCanInteract: jest.Mock;
+    getVisibilityExcludedUserIds: jest.Mock;
+  };
 
   const currentUser = {
     id: "11111111-1111-4111-8111-111111111111",
@@ -42,12 +48,25 @@ describe("UserService follow behavior", () => {
       remove: jest.fn(),
     };
 
+    moderationService = {
+      assertTextFieldsAreAllowed: jest.fn(),
+      assertUsersCanInteract: jest.fn().mockResolvedValue(undefined),
+      getVisibilityExcludedUserIds: jest.fn().mockResolvedValue([]),
+    };
+
     (userRepository.findOne as jest.Mock).mockImplementation(({ where }) => {
       if (where?.id === currentUser.id) {
         return Promise.resolve({ ...currentUser });
       }
       if (where?.id === targetUser.id) {
         return Promise.resolve({ ...targetUser });
+      }
+      if (where?.oauthId === "firebase-uid-1") {
+        return Promise.resolve({
+          ...currentUser,
+          oauthId: "firebase-uid-1",
+          onboardingStep: 0,
+        });
       }
       return Promise.resolve(null);
     });
@@ -62,6 +81,10 @@ describe("UserService follow behavior", () => {
         {
           provide: getRepositoryToken(UserFollow),
           useValue: followRepository,
+        },
+        {
+          provide: ModerationService,
+          useValue: moderationService,
         },
       ],
     }).compile();
@@ -242,6 +265,61 @@ describe("UserService follow behavior", () => {
     expect(userRepository.findOne).toHaveBeenCalledTimes(1);
     expect(userRepository.findOne).toHaveBeenCalledWith({
       where: { oauthId: firebaseUid },
+    });
+  });
+
+  it("updateOnboardingDetails rejects users younger than 13", async () => {
+    await expect(
+      service.updateOnboardingDetails("firebase-uid-1", {
+        dateOfBirth: "2018-05-01",
+        country: "United States",
+        city: "Chicago",
+        bio: "Too young for the app.",
+      }),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it("updateOnboardingDetails saves normalized profile details", async () => {
+    (userRepository.save as jest.Mock).mockImplementation(async (value) => value);
+
+    const result = await service.updateOnboardingDetails("firebase-uid-1", {
+      dateOfBirth: "2000-05-01",
+      country: "  United States  ",
+      city: "  Chicago ",
+      bio: "  I keep a running backlog of records to hear live.  ",
+    });
+
+    expect(moderationService.assertTextFieldsAreAllowed).toHaveBeenCalledWith([
+      {
+        label: "bio",
+        value: "I keep a running backlog of records to hear live.",
+      },
+      {
+        label: "country",
+        value: "United States",
+      },
+      {
+        label: "city",
+        value: "Chicago",
+      },
+    ]);
+    expect(userRepository.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oauthId: "firebase-uid-1",
+        dateOfBirth: "2000-05-01",
+        country: "United States",
+        city: "Chicago",
+        bio: "I keep a running backlog of records to hear live.",
+        onboardingStep: 1,
+      }),
+    );
+    expect(result).toEqual({
+      message: "Onboarding details updated successfully",
+      user: expect.objectContaining({
+        dateOfBirth: "2000-05-01",
+        country: "United States",
+        city: "Chicago",
+      }),
     });
   });
 });

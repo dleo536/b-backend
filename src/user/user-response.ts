@@ -22,6 +22,9 @@ export const toPublicUserResponse = (user: User) => ({
 export const toSelfUserResponse = (user: User) => ({
     ...toPublicUserResponse(user),
     email: user.email ?? null,
+    dateOfBirth: user.dateOfBirth ?? null,
+    country: user.country ?? null,
+    city: user.city ?? null,
 });
 
 export const toPublicUserResponses = (users: User[]) =>
