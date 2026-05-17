@@ -1,7 +1,14 @@
 // src/lists/entities/album-list.entity.ts
 import {
-  Entity, PrimaryGeneratedColumn, Column, Index, CreateDateColumn, UpdateDateColumn, DeleteDateColumn,
-  ManyToOne, JoinColumn
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  Index,
+  CreateDateColumn,
+  UpdateDateColumn,
+  DeleteDateColumn,
+  ManyToOne,
+  JoinColumn,
 } from 'typeorm';
 import { User } from '../user/user.entity';
 //   import { AlbumListItem } from './album-list-item.entity';
@@ -14,14 +21,14 @@ export enum ListVisibility {
 
 export enum ListType {
   CUSTOM = 'custom',
-  FAVORITES = 'favorites',       // e.g., “Favorite Albums”
-  TOP_N = 'top_n',               // e.g., “Top 100”
-  YEAR = 'year',                 // e.g., “Best of 2024”
-  THEME = 'theme',               // e.g., “Rainy Day Records”
+  FAVORITES = 'favorites', // e.g., “Favorite Albums”
+  TOP_N = 'top_n', // e.g., “Top 100”
+  YEAR = 'year', // e.g., “Best of 2024”
+  THEME = 'theme', // e.g., “Rainy Day Records”
 }
 
 @Entity('album_lists')
-@Index(['ownerId', 'slug'], { unique: true })              // pretty URL per user
+@Index(['ownerId', 'slug'], { unique: true }) // pretty URL per user
 @Index(['visibility'])
 @Index(['createdAt'])
 export class AlbumList {
@@ -32,7 +39,7 @@ export class AlbumList {
   @Column('uuid')
   ownerId: string; // UUID FK to users.id
 
-  @ManyToOne(() => User, u => u.id, { onDelete: 'CASCADE' })
+  @ManyToOne(() => User, (u) => u.id, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'ownerId' })
   owner: User;
 
@@ -52,7 +59,11 @@ export class AlbumList {
   @Column({ type: 'boolean', default: false })
   isSystem: boolean; // true for auto-created lists (Backlog/Favorites)
 
-  @Column({ type: 'enum', enum: ListVisibility, default: ListVisibility.PUBLIC })
+  @Column({
+    type: 'enum',
+    enum: ListVisibility,
+    default: ListVisibility.PUBLIC,
+  })
   visibility: ListVisibility;
 
   @Column({ type: 'text', nullable: true })

@@ -1,22 +1,25 @@
-import { IsEnum, IsOptional, IsString, IsUUID, MaxLength } from "class-validator";
 import {
-    ReportReason,
-    ReportTargetType,
-} from "../content-report.entity";
+  IsEnum,
+  IsOptional,
+  IsString,
+  IsUUID,
+  MaxLength,
+} from 'class-validator';
+import { ReportReason, ReportTargetType } from '../content-report.entity';
 
 export class CreateReportDto {
-    @IsEnum(ReportTargetType)
-    targetType: ReportTargetType;
+  @IsEnum(ReportTargetType)
+  targetType: ReportTargetType;
 
-    @IsUUID()
-    targetId: string;
+  @IsUUID()
+  targetId: string;
 
-    @IsOptional()
-    @IsEnum(ReportReason)
-    reason?: ReportReason;
+  @IsOptional()
+  @IsEnum(ReportReason)
+  reason?: ReportReason;
 
-    @IsOptional()
-    @IsString()
-    @MaxLength(1000)
-    details?: string;
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  details?: string;
 }

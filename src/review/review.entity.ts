@@ -1,5 +1,15 @@
-import { Entity, PrimaryGeneratedColumn, Column, CreateDateColumn, UpdateDateColumn, DeleteDateColumn, Index, ManyToOne, JoinColumn } from "typeorm";
-import { User } from "../user/user.entity";
+import {
+  Entity,
+  PrimaryGeneratedColumn,
+  Column,
+  CreateDateColumn,
+  UpdateDateColumn,
+  DeleteDateColumn,
+  Index,
+  ManyToOne,
+  JoinColumn,
+} from 'typeorm';
+import { User } from '../user/user.entity';
 
 const numericRatingTransformer = {
   to: (value?: number | null) => {
@@ -27,9 +37,6 @@ export const ReviewVisibility = {
 export type ReviewVisibility = 'public' | 'friends' | 'private';
 
 export const ReviewVisibilityValues = ['public', 'friends', 'private'];
-
-
-
 
 @Entity('reviews')
 @Index(['userId', 'releaseGroupMbId'], {
@@ -84,7 +91,13 @@ export class Review {
 
   // --- Review content ---
   // Stored as a 10-point score with one decimal place, e.g. 9.2 / 10.
-  @Column({ type: 'numeric', precision: 3, scale: 1, nullable: true, transformer: numericRatingTransformer })
+  @Column({
+    type: 'numeric',
+    precision: 3,
+    scale: 1,
+    nullable: true,
+    transformer: numericRatingTransformer,
+  })
   ratingHalfSteps?: number;
 
   @Column({ type: 'varchar', length: 140, nullable: true })
@@ -99,9 +112,12 @@ export class Review {
   @Column({ type: 'boolean', default: false })
   isDraft: boolean;
 
-  @Column({ type: 'enum', enum: ReviewVisibilityValues, default: ReviewVisibility.PUBLIC })
+  @Column({
+    type: 'enum',
+    enum: ReviewVisibilityValues,
+    default: ReviewVisibility.PUBLIC,
+  })
   visibility: ReviewVisibility;
-
 
   // --- Optional arrays / JSON (PostgreSQL) ---
   @Column({ type: 'text', array: true, default: '{}' })

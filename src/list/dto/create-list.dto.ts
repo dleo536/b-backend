@@ -1,7 +1,21 @@
-import { ArrayMaxSize, IsArray, IsIn, IsEnum, IsNotEmpty, IsOptional, IsString, Length, Matches, MaxLength } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsIn,
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  Length,
+  Matches,
+  MaxLength,
+} from 'class-validator';
 import { ListType, ListVisibility } from '../list.entity';
 
-const LaunchListVisibilityValues = [ListVisibility.PUBLIC, ListVisibility.PRIVATE] as const;
+const LaunchListVisibilityValues = [
+  ListVisibility.PUBLIC,
+  ListVisibility.PRIVATE,
+] as const;
 
 export class CreateListDto {
   @IsString()
@@ -13,7 +27,7 @@ export class CreateListDto {
   @IsNotEmpty()
   @Length(1, 140)
   @Matches(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
-    message: "slug must be lowercase letters, numbers, and hyphens only",
+    message: 'slug must be lowercase letters, numbers, and hyphens only',
   })
   slug: string;
 

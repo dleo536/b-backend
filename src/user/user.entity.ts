@@ -21,7 +21,13 @@ export const AuthProvider = {
 
 export type AuthProvider = 'local' | 'google' | 'apple' | 'github' | 'spotify';
 
-export const AuthProviderValues = ['local', 'google', 'apple', 'github', 'spotify'];
+export const AuthProviderValues = [
+  'local',
+  'google',
+  'apple',
+  'github',
+  'spotify',
+];
 
 export const UserRole = {
   USER: 'user',
@@ -42,6 +48,15 @@ export const ProfileVisibility = {
 export type ProfileVisibility = 'public' | 'friends' | 'private';
 
 export const ProfileVisibilityValues = ['public', 'friends', 'private'];
+
+export const LocationSource = {
+  PICKER: 'picker',
+  MANUAL: 'manual',
+} as const;
+
+export type LocationSource = 'picker' | 'manual';
+
+export const LocationSourceValues = ['picker', 'manual'];
 
 @Entity('user')
 @Index(['emailLower'], { unique: true })
@@ -72,7 +87,11 @@ export class User {
   @Column({ type: 'varchar', length: 255, nullable: true, select: false })
   passwordHash?: string; // null for OAuth-only
 
-  @Column({ type: 'enum', enum: AuthProviderValues, default: AuthProvider.LOCAL })
+  @Column({
+    type: 'enum',
+    enum: AuthProviderValues,
+    default: AuthProvider.LOCAL,
+  })
   authProvider: AuthProvider;
 
   @Column({ type: 'varchar', length: 191, nullable: true })
@@ -94,8 +113,23 @@ export class User {
   @Column({ type: 'varchar', length: 80, nullable: true })
   country?: string;
 
+  @Column({ type: 'varchar', length: 2, nullable: true })
+  countryCode?: string;
+
   @Column({ type: 'varchar', length: 120, nullable: true })
   city?: string;
+
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  regionName?: string;
+
+  @Column({ type: 'double precision', nullable: true })
+  latitude?: number;
+
+  @Column({ type: 'double precision', nullable: true })
+  longitude?: number;
+
+  @Column({ type: 'varchar', length: 16, nullable: true })
+  locationSource?: LocationSource;
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   avatarUrl?: string;
@@ -121,27 +155,41 @@ export class User {
 
   // --- Preferences (UI + behavior) ---
   @Column({
-    type: 'jsonb', default: {
+    type: 'jsonb',
+    default: {
       theme: 'system',
       ratingScale: 'HALF_STARS', // HALF_STARS | QUARTER_STARS | TEN_POINT
       defaultReviewVisibility: 'public',
       showListeningActivity: true,
       allowCommentsFrom: 'everyone', // everyone | followers | nobody
-    }
+    },
   })
   preferences: {
     theme?: 'light' | 'dark' | 'system';
     ratingScale?: 'HALF_STARS' | 'QUARTER_STARS' | 'TEN_POINT';
-    defaultReviewVisibility?: ProfileVisibility | 'public' | 'friends' | 'private';
+    defaultReviewVisibility?:
+      | ProfileVisibility
+      | 'public'
+      | 'friends'
+      | 'private';
     showListeningActivity?: boolean;
     allowCommentsFrom?: 'everyone' | 'followers' | 'nobody';
   };
 
-  @Column({ type: 'enum', enum: ProfileVisibilityValues, default: ProfileVisibility.PUBLIC })
+  @Column({
+    type: 'enum',
+    enum: ProfileVisibilityValues,
+    default: ProfileVisibility.PUBLIC,
+  })
   profileVisibility: ProfileVisibility;
 
   // --- Roles / moderation ---
-  @Column({ type: 'enum', enum: UserRoleValues, array: true, default: [UserRole.USER] })
+  @Column({
+    type: 'enum',
+    enum: UserRoleValues,
+    array: true,
+    default: [UserRole.USER],
+  })
   roles: UserRole[];
 
   @Column({ type: 'boolean', default: false })

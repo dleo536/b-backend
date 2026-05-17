@@ -1,23 +1,25 @@
-import { Test, TestingModule } from "@nestjs/testing";
-import { getRepositoryToken } from "@nestjs/typeorm";
-import { Repository } from "typeorm";
-import { ForbiddenException, NotFoundException } from "@nestjs/common";
-import { ListService } from "./list.service";
-import { AlbumList } from "./list.entity";
-import { User } from "../user/user.entity";
-import { UserFollow } from "../user/follow.entity";
-import { ListLike } from "./list-like.entity";
-import { AuthUserContextService } from "../auth/auth-user-context.service";
+import { Test, TestingModule } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
+import { ListService } from './list.service';
+import { AlbumList } from './list.entity';
+import { User } from '../user/user.entity';
+import { UserFollow } from '../user/follow.entity';
+import { ListLike } from './list-like.entity';
+import { AuthUserContextService } from '../auth/auth-user-context.service';
 
 type MockRepository<T> = Partial<Record<keyof Repository<T>, jest.Mock>>;
 
-describe("ListService", () => {
+describe('ListService', () => {
   let service: ListService;
   let listRepository: MockRepository<AlbumList>;
   let userRepository: MockRepository<User>;
   let followRepository: MockRepository<UserFollow>;
   let listLikeRepository: MockRepository<ListLike>;
-  let authUserContextService: Partial<Record<keyof AuthUserContextService, jest.Mock>>;
+  let authUserContextService: Partial<
+    Record<keyof AuthUserContextService, jest.Mock>
+  >;
 
   beforeEach(async () => {
     listRepository = {
@@ -81,181 +83,204 @@ describe("ListService", () => {
     service = module.get<ListService>(ListService);
   });
 
-  it("returns an empty data array when current user has no lists", async () => {
+  it('returns an empty data array when current user has no lists', async () => {
     (userRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "11111111-1111-1111-1111-111111111111",
-      oauthId: "firebase-uid-123",
+      id: '11111111-1111-1111-1111-111111111111',
+      oauthId: 'firebase-uid-123',
     });
     (listRepository.count as jest.Mock).mockResolvedValue(0);
     (listRepository.find as jest.Mock).mockResolvedValue([]);
 
-    const result = await service.findAll("firebase-uid-123", 0, 10);
+    const result = await service.findAll('firebase-uid-123', 0, 10);
 
     expect(result).toEqual({
       data: [],
       hasMore: false,
       totalCount: 0,
-      mode: "user",
+      mode: 'user',
     });
     expect(listRepository.count).toHaveBeenCalled();
     expect(listRepository.find).toHaveBeenCalled();
   });
 
-  it("returns global user-created lists when viewer follows no one", async () => {
+  it('returns global user-created lists when viewer follows no one', async () => {
     (userRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "11111111-1111-1111-1111-111111111111",
-      oauthId: "viewer-uid",
+      id: '11111111-1111-1111-1111-111111111111',
+      oauthId: 'viewer-uid',
     });
     (followRepository.find as jest.Mock).mockResolvedValue([]);
     (listRepository.count as jest.Mock).mockResolvedValue(1);
-    (listRepository.find as jest.Mock).mockResolvedValue([{ id: "global-list-1" }]);
+    (listRepository.find as jest.Mock).mockResolvedValue([
+      { id: 'global-list-1' },
+    ]);
 
-    const result = await service.findAll(undefined, 0, 10, "viewer-uid");
+    const result = await service.findAll(undefined, 0, 10, 'viewer-uid');
 
-    expect(result.data).toEqual([{ id: "global-list-1" }]);
-    expect(result.mode).toBe("global");
+    expect(result.data).toEqual([{ id: 'global-list-1' }]);
+    expect(result.mode).toBe('global');
     expect(listRepository.count).toHaveBeenCalledWith({
       where: [
-        { isSystem: false, visibility: "public" },
-        { isSystem: false, ownerId: "11111111-1111-1111-1111-111111111111" },
+        { isSystem: false, visibility: 'public' },
+        { isSystem: false, ownerId: '11111111-1111-1111-1111-111111111111' },
       ],
     });
     expect(listRepository.find).toHaveBeenCalledWith(
       expect.objectContaining({
         where: [
-          { isSystem: false, visibility: "public" },
-          { isSystem: false, ownerId: "11111111-1111-1111-1111-111111111111" },
+          { isSystem: false, visibility: 'public' },
+          { isSystem: false, ownerId: '11111111-1111-1111-1111-111111111111' },
         ],
       }),
     );
   });
 
-  it("falls back to global user-created lists when follows exist but followed users have no lists", async () => {
+  it('falls back to global user-created lists when follows exist but followed users have no lists', async () => {
     (userRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "11111111-1111-1111-1111-111111111111",
-      oauthId: "viewer-uid",
+      id: '11111111-1111-1111-1111-111111111111',
+      oauthId: 'viewer-uid',
     });
     (followRepository.find as jest.Mock).mockResolvedValue([
-      { followerId: "11111111-1111-1111-1111-111111111111", followingId: "22222222-2222-2222-2222-222222222222" },
+      {
+        followerId: '11111111-1111-1111-1111-111111111111',
+        followingId: '22222222-2222-2222-2222-222222222222',
+      },
     ]);
     (listRepository.count as jest.Mock)
       .mockResolvedValueOnce(0) // followed-only count
       .mockResolvedValueOnce(2); // global fallback count
-    (listRepository.find as jest.Mock).mockResolvedValue([{ id: "global-list-2" }]);
+    (listRepository.find as jest.Mock).mockResolvedValue([
+      { id: 'global-list-2' },
+    ]);
 
-    const result = await service.findAll(undefined, 0, 10, "viewer-uid");
+    const result = await service.findAll(undefined, 0, 10, 'viewer-uid');
 
-    expect(result.data).toEqual([{ id: "global-list-2" }]);
-    expect(result.mode).toBe("global-fallback");
+    expect(result.data).toEqual([{ id: 'global-list-2' }]);
+    expect(result.mode).toBe('global-fallback');
 
     const firstCountCall = (listRepository.count as jest.Mock).mock.calls[0][0];
     expect(firstCountCall.where.isSystem).toBe(false);
     expect(firstCountCall.where.ownerId.value).toEqual([
-      "22222222-2222-2222-2222-222222222222",
+      '22222222-2222-2222-2222-222222222222',
     ]);
-    expect(firstCountCall.where.visibility).toBe("public");
+    expect(firstCountCall.where.visibility).toBe('public');
     const findCall = (listRepository.find as jest.Mock).mock.calls[0][0];
     expect(findCall.where).toEqual([
-      { isSystem: false, visibility: "public" },
-      { isSystem: false, ownerId: "11111111-1111-1111-1111-111111111111" },
+      { isSystem: false, visibility: 'public' },
+      { isSystem: false, ownerId: '11111111-1111-1111-1111-111111111111' },
     ]);
   });
 
-  it("returns followed-only user-created lists when followed users have list content", async () => {
+  it('returns followed-only user-created lists when followed users have list content', async () => {
     (userRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "11111111-1111-1111-1111-111111111111",
-      oauthId: "viewer-uid",
+      id: '11111111-1111-1111-1111-111111111111',
+      oauthId: 'viewer-uid',
     });
     (followRepository.find as jest.Mock).mockResolvedValue([
-      { followerId: "11111111-1111-1111-1111-111111111111", followingId: "22222222-2222-2222-2222-222222222222" },
+      {
+        followerId: '11111111-1111-1111-1111-111111111111',
+        followingId: '22222222-2222-2222-2222-222222222222',
+      },
     ]);
     (listRepository.count as jest.Mock).mockResolvedValue(1);
-    (listRepository.find as jest.Mock).mockResolvedValue([{ id: "filtered-list-1" }]);
+    (listRepository.find as jest.Mock).mockResolvedValue([
+      { id: 'filtered-list-1' },
+    ]);
 
-    const result = await service.findAll(undefined, 0, 10, "viewer-uid");
+    const result = await service.findAll(undefined, 0, 10, 'viewer-uid');
 
-    expect(result.data).toEqual([{ id: "filtered-list-1" }]);
-    expect(result.mode).toBe("following");
+    expect(result.data).toEqual([{ id: 'filtered-list-1' }]);
+    expect(result.mode).toBe('following');
     expect(listRepository.count).toHaveBeenCalledTimes(2);
     const findCall = (listRepository.find as jest.Mock).mock.calls[0][0];
     expect(findCall.where).toEqual([
       {
         ownerId: expect.objectContaining({
           value: expect.arrayContaining([
-            "11111111-1111-1111-1111-111111111111",
-            "22222222-2222-2222-2222-222222222222",
+            '11111111-1111-1111-1111-111111111111',
+            '22222222-2222-2222-2222-222222222222',
           ]),
         }),
         isSystem: false,
-        visibility: "public",
+        visibility: 'public',
       },
       {
-        ownerId: "11111111-1111-1111-1111-111111111111",
+        ownerId: '11111111-1111-1111-1111-111111111111',
         isSystem: false,
       },
     ]);
   });
 
-  it("filters global lists by partial title when a title query is provided", async () => {
-    (listRepository.count as jest.Mock).mockResolvedValue(1);
-    (listRepository.find as jest.Mock).mockResolvedValue([{ id: "list-2025", title: "Best of 2025" }]);
-
-    const result = await service.findAll(undefined, 0, 10, undefined, "2025");
-
-    expect(result).toEqual({
-      data: [{ id: "list-2025", title: "Best of 2025" }],
-      hasMore: false,
-      totalCount: 1,
-      mode: "global",
-    });
-
-    const countCall = (listRepository.count as jest.Mock).mock.calls[0][0];
-    expect(countCall.where.isSystem).toBe(false);
-    expect(countCall.where.title?.value).toBe("%2025%");
-
-    const findCall = (listRepository.find as jest.Mock).mock.calls[0][0];
-    expect(findCall.where.isSystem).toBe(false);
-    expect(findCall.where.title?.value).toBe("%2025%");
-  });
-
-  it("filters global lists by album membership when an album id query is provided", async () => {
+  it('filters global lists by partial title when a title query is provided', async () => {
     (listRepository.count as jest.Mock).mockResolvedValue(1);
     (listRepository.find as jest.Mock).mockResolvedValue([
-      { id: "album-list-1", title: "Records with this album" },
+      { id: 'list-2025', title: 'Best of 2025' },
     ]);
 
-    const result = await service.findAll(undefined, 0, 10, undefined, undefined, "spotify-album-1");
+    const result = await service.findAll(undefined, 0, 10, undefined, '2025');
 
     expect(result).toEqual({
-      data: [{ id: "album-list-1", title: "Records with this album" }],
+      data: [{ id: 'list-2025', title: 'Best of 2025' }],
       hasMore: false,
       totalCount: 1,
-      mode: "global",
+      mode: 'global',
     });
 
     const countCall = (listRepository.count as jest.Mock).mock.calls[0][0];
     expect(countCall.where.isSystem).toBe(false);
-    expect(countCall.where.albumIds?.value).toEqual(["spotify-album-1"]);
+    expect(countCall.where.title?.value).toBe('%2025%');
 
     const findCall = (listRepository.find as jest.Mock).mock.calls[0][0];
     expect(findCall.where.isSystem).toBe(false);
-    expect(findCall.where.albumIds?.value).toEqual(["spotify-album-1"]);
+    expect(findCall.where.title?.value).toBe('%2025%');
   });
 
-  it("likeList creates a like row and increments likesCount", async () => {
+  it('filters global lists by album membership when an album id query is provided', async () => {
+    (listRepository.count as jest.Mock).mockResolvedValue(1);
+    (listRepository.find as jest.Mock).mockResolvedValue([
+      { id: 'album-list-1', title: 'Records with this album' },
+    ]);
+
+    const result = await service.findAll(
+      undefined,
+      0,
+      10,
+      undefined,
+      undefined,
+      'spotify-album-1',
+    );
+
+    expect(result).toEqual({
+      data: [{ id: 'album-list-1', title: 'Records with this album' }],
+      hasMore: false,
+      totalCount: 1,
+      mode: 'global',
+    });
+
+    const countCall = (listRepository.count as jest.Mock).mock.calls[0][0];
+    expect(countCall.where.isSystem).toBe(false);
+    expect(countCall.where.albumIds?.value).toEqual(['spotify-album-1']);
+
+    const findCall = (listRepository.find as jest.Mock).mock.calls[0][0];
+    expect(findCall.where.isSystem).toBe(false);
+    expect(findCall.where.albumIds?.value).toEqual(['spotify-album-1']);
+  });
+
+  it('likeList creates a like row and increments likesCount', async () => {
     const viewer = {
-      id: "11111111-1111-1111-1111-111111111111",
-      oauthId: "viewer-uid",
+      id: '11111111-1111-1111-1111-111111111111',
+      oauthId: 'viewer-uid',
     };
     const list = {
-      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       likesCount: 2,
     };
 
     (userRepository.findOne as jest.Mock).mockResolvedValue(viewer);
     (listRepository.findOne as jest.Mock).mockResolvedValue({ ...list });
     (listLikeRepository.findOne as jest.Mock).mockResolvedValue(null);
-    (listLikeRepository.create as jest.Mock).mockImplementation((value) => value);
+    (listLikeRepository.create as jest.Mock).mockImplementation(
+      (value) => value,
+    );
     (listLikeRepository.save as jest.Mock).mockResolvedValue({
       userId: viewer.id,
       listId: list.id,
@@ -286,13 +311,13 @@ describe("ListService", () => {
     );
   });
 
-  it("unlikeList removes a like row and decrements likesCount", async () => {
+  it('unlikeList removes a like row and decrements likesCount', async () => {
     const viewer = {
-      id: "11111111-1111-1111-1111-111111111111",
-      oauthId: "viewer-uid",
+      id: '11111111-1111-1111-1111-111111111111',
+      oauthId: 'viewer-uid',
     };
     const list = {
-      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
       likesCount: 3,
     };
 
@@ -326,14 +351,14 @@ describe("ListService", () => {
     );
   });
 
-  it("getLikedLists returns liked list data for the viewer", async () => {
+  it('getLikedLists returns liked list data for the viewer', async () => {
     const viewer = {
-      id: "11111111-1111-1111-1111-111111111111",
-      oauthId: "viewer-uid",
+      id: '11111111-1111-1111-1111-111111111111',
+      oauthId: 'viewer-uid',
     };
     const likedList = {
-      id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-      title: "Liked list",
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      title: 'Liked list',
     };
 
     (userRepository.findOne as jest.Mock).mockResolvedValue(viewer);
@@ -355,84 +380,86 @@ describe("ListService", () => {
     expect(listLikeRepository.find).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { userId: viewer.id },
-        relations: ["list"],
+        relations: ['list'],
       }),
     );
   });
 
-  it("hides private list details from non-owners", async () => {
+  it('hides private list details from non-owners', async () => {
     (listRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "private-list",
-      ownerId: "owner-user-id",
-      visibility: "private",
+      id: 'private-list',
+      ownerId: 'owner-user-id',
+      visibility: 'private',
     });
     (userRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "viewer-user-id",
-      oauthId: "viewer-uid",
+      id: 'viewer-user-id',
+      oauthId: 'viewer-uid',
     });
 
-    await expect(service.findOne("private-list", "viewer-uid")).rejects.toBeInstanceOf(
-      NotFoundException,
-    );
+    await expect(
+      service.findOne('private-list', 'viewer-uid'),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
-  it("allows owners to read their own private lists", async () => {
+  it('allows owners to read their own private lists', async () => {
     (listRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "private-list",
-      ownerId: "owner-user-id",
-      visibility: "private",
+      id: 'private-list',
+      ownerId: 'owner-user-id',
+      visibility: 'private',
     });
     (userRepository.findOne as jest.Mock).mockResolvedValue({
-      id: "owner-user-id",
-      oauthId: "owner-uid",
+      id: 'owner-user-id',
+      oauthId: 'owner-uid',
     });
 
-    await expect(service.findOne("private-list", "owner-uid")).resolves.toEqual(
+    await expect(service.findOne('private-list', 'owner-uid')).resolves.toEqual(
       expect.objectContaining({
-        id: "private-list",
-        visibility: "private",
+        id: 'private-list',
+        visibility: 'private',
       }),
     );
   });
 
-  it("removeAsAdmin soft-deletes a list when the actor is an admin", async () => {
+  it('removeAsAdmin soft-deletes a list when the actor is an admin', async () => {
     const list = {
-      id: "admin-list-1",
-      ownerId: "owner-user-id",
-      visibility: "public",
+      id: 'admin-list-1',
+      ownerId: 'owner-user-id',
+      visibility: 'public',
     } as AlbumList;
 
-    (authUserContextService.requireAdminByOauthId as jest.Mock).mockResolvedValue({
-      id: "admin-user-id",
-      oauthId: "admin-uid",
-      roles: ["admin"],
+    (
+      authUserContextService.requireAdminByOauthId as jest.Mock
+    ).mockResolvedValue({
+      id: 'admin-user-id',
+      oauthId: 'admin-uid',
+      roles: ['admin'],
     });
     (listRepository.findOne as jest.Mock).mockResolvedValue(list);
     (listRepository.softRemove as jest.Mock).mockResolvedValue({
       ...list,
-      deletedAt: new Date("2026-03-25T00:00:00.000Z"),
+      deletedAt: new Date('2026-03-25T00:00:00.000Z'),
     });
 
-    const result = await service.removeAsAdmin("admin-list-1", "admin-uid");
+    const result = await service.removeAsAdmin('admin-list-1', 'admin-uid');
 
     expect(authUserContextService.requireAdminByOauthId).toHaveBeenCalledWith(
-      "admin-uid",
+      'admin-uid',
     );
     expect(listRepository.softRemove).toHaveBeenCalledWith(list);
     expect(result).toEqual(
       expect.objectContaining({
-        id: "admin-list-1",
+        id: 'admin-list-1',
       }),
     );
   });
 
-  it("removeAsAdmin rejects non-admin callers", async () => {
-    (authUserContextService.requireAdminByOauthId as jest.Mock).mockRejectedValue(
-      new ForbiddenException("Admin access required"),
-    );
+  it('removeAsAdmin rejects non-admin callers', async () => {
+    (
+      authUserContextService.requireAdminByOauthId as jest.Mock
+    ).mockRejectedValue(new ForbiddenException('Admin access required'));
 
     await expect(
-      service.removeAsAdmin("admin-list-2", "viewer-uid"),
+      service.removeAsAdmin('admin-list-2', 'viewer-uid'),
     ).rejects.toBeInstanceOf(ForbiddenException);
     expect(listRepository.findOne).not.toHaveBeenCalled();
     expect(listRepository.softRemove).not.toHaveBeenCalled();

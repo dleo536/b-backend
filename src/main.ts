@@ -1,11 +1,11 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import "reflect-metadata";
+import 'reflect-metadata';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  app.getHttpAdapter().getInstance().disable("x-powered-by");
+  app.getHttpAdapter().getInstance().disable('x-powered-by');
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

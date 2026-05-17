@@ -1,4 +1,7 @@
-import { BadGatewayException, ServiceUnavailableException } from '@nestjs/common';
+import {
+  BadGatewayException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { SpotifyService } from './spotify.service';
 
 describe('SpotifyService', () => {

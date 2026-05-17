@@ -8,15 +8,15 @@ import { DataSource } from 'typeorm';
 // For CLI usage, ensure .env file is loaded or set env vars manually
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 export const AppDataSource = new DataSource({
-    type: 'postgres',
-    host: process.env.DB_HOST,
-    port: parseInt(process.env.DB_PORT ?? '5432'),
-    username: process.env.DB_USERNAME,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-    // Use path-based entity loading for TypeORM CLI compatibility
-    // These paths work when running with ts-node
-    entities: ['src/**/*.entity.ts'],
-    migrations: ['src/migrations/*.ts'],
-    synchronize: false,
+  type: 'postgres',
+  host: process.env.DB_HOST,
+  port: parseInt(process.env.DB_PORT ?? '5432'),
+  username: process.env.DB_USERNAME,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  // Use path-based entity loading for TypeORM CLI compatibility
+  // These paths work when running with ts-node
+  entities: ['src/**/*.entity.ts'],
+  migrations: ['src/migrations/*.ts'],
+  synchronize: false,
 });

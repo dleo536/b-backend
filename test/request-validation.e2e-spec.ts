@@ -1,9 +1,14 @@
-import { ArgumentMetadata, BadRequestException, ValidationPipe } from "@nestjs/common";
-import { CreateListDto } from "../src/list/dto/create-list.dto";
-import { CreateReviewDto } from "../src/review/dto/create-review.dto";
-import { UpdateReviewDto } from "../src/review/dto/update-review.dto";
-import { CreateUserDto } from "../src/user/dto/create-user.dto";
-import { UpdateUserDto } from "../src/user/dto/update-user.dto";
+import {
+  ArgumentMetadata,
+  BadRequestException,
+  ValidationPipe,
+} from '@nestjs/common';
+import { CreateListDto } from '../src/list/dto/create-list.dto';
+import { CreateReviewDto } from '../src/review/dto/create-review.dto';
+import { UpdateReviewDto } from '../src/review/dto/update-review.dto';
+import { CompleteOnboardingDetailsDto } from '../src/user/dto/complete-onboarding-details.dto';
+import { CreateUserDto } from '../src/user/dto/create-user.dto';
+import { UpdateUserDto } from '../src/user/dto/update-user.dto';
 
 const pipe = new ValidationPipe({
   transform: true,
@@ -11,56 +16,57 @@ const pipe = new ValidationPipe({
   forbidNonWhitelisted: true,
 });
 
-const bodyMetadata = (metatype: ArgumentMetadata["metatype"]): ArgumentMetadata => ({
-  type: "body",
+const bodyMetadata = (
+  metatype: ArgumentMetadata['metatype'],
+): ArgumentMetadata => ({
+  type: 'body',
   metatype,
   data: undefined,
 });
 
-describe("Request validation", () => {
-  it("rejects missing required user fields with 400 semantics", async () => {
+describe('Request validation', () => {
+  it('rejects missing required user fields with 400 semantics', async () => {
     await expect(
       pipe.transform(
         {
-          username: "validname",
-          lastName: "User",
+          lastName: 'User',
         },
         bodyMetadata(CreateUserDto),
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("rejects extra undeclared user fields", async () => {
+  it('rejects extra undeclared user fields', async () => {
     await expect(
       pipe.transform(
         {
-          username: "validname",
-          firstName: "Valid",
-          lastName: "User",
-          roles: ["admin"],
+          username: 'validname',
+          firstName: 'Valid',
+          lastName: 'User',
+          roles: ['admin'],
         },
         bodyMetadata(CreateUserDto),
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("rejects legacy user patch fields", async () => {
+  it('rejects legacy user patch fields', async () => {
     await expect(
       pipe.transform(
         {
-          backlogListId: "list-1",
+          backlogListId: 'list-1',
         },
         bodyMetadata(UpdateUserDto),
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("rejects internal-only list fields", async () => {
+  it('rejects internal-only list fields', async () => {
     await expect(
       pipe.transform(
         {
-          title: "Favorites",
-          slug: "favorites",
+          title: 'Favorites',
+          slug: 'favorites',
           isSystem: true,
         },
         bodyMetadata(CreateListDto),
@@ -68,40 +74,40 @@ describe("Request validation", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("rejects invalid list enum values", async () => {
+  it('rejects invalid list enum values', async () => {
     await expect(
       pipe.transform(
         {
-          title: "A list",
-          slug: "a-list",
-          visibility: "friends",
+          title: 'A list',
+          slug: 'a-list',
+          visibility: 'friends',
         },
         bodyMetadata(CreateListDto),
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("rejects invalid review field types", async () => {
+  it('rejects invalid review field types', async () => {
     await expect(
       pipe.transform(
         {
-          releaseGroupMbId: "rg-1",
-          albumTitleSnapshot: "Album",
-          artistNameSnapshot: "Artist",
-          ratingHalfSteps: "five",
+          releaseGroupMbId: 'rg-1',
+          albumTitleSnapshot: 'Album',
+          artistNameSnapshot: 'Artist',
+          ratingHalfSteps: 'five',
         },
         bodyMetadata(CreateReviewDto),
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("accepts one-decimal review ratings on a 10-point scale", async () => {
+  it('accepts one-decimal review ratings on a 10-point scale', async () => {
     await expect(
       pipe.transform(
         {
-          releaseGroupMbId: "rg-1",
-          albumTitleSnapshot: "Album",
-          artistNameSnapshot: "Artist",
+          releaseGroupMbId: 'rg-1',
+          albumTitleSnapshot: 'Album',
+          artistNameSnapshot: 'Artist',
           ratingHalfSteps: 9.2,
         },
         bodyMetadata(CreateReviewDto),
@@ -113,13 +119,13 @@ describe("Request validation", () => {
     );
   });
 
-  it("rejects review ratings with more than one decimal place", async () => {
+  it('rejects review ratings with more than one decimal place', async () => {
     await expect(
       pipe.transform(
         {
-          releaseGroupMbId: "rg-1",
-          albumTitleSnapshot: "Album",
-          artistNameSnapshot: "Artist",
+          releaseGroupMbId: 'rg-1',
+          albumTitleSnapshot: 'Album',
+          artistNameSnapshot: 'Artist',
           ratingHalfSteps: 9.21,
         },
         bodyMetadata(CreateReviewDto),
@@ -127,7 +133,7 @@ describe("Request validation", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("rejects review ratings above 10", async () => {
+  it('rejects review ratings above 10', async () => {
     await expect(
       pipe.transform(
         {
@@ -138,7 +144,7 @@ describe("Request validation", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("rejects extra undeclared review update fields", async () => {
+  it('rejects extra undeclared review update fields', async () => {
     await expect(
       pipe.transform(
         {
@@ -149,29 +155,62 @@ describe("Request validation", () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it("accepts supported private review visibility on create", async () => {
+  it('accepts structured onboarding location details', async () => {
     await expect(
       pipe.transform(
         {
-          releaseGroupMbId: "rg-1",
-          albumTitleSnapshot: "Album",
-          artistNameSnapshot: "Artist",
-          visibility: "private",
+          dateOfBirth: '2000-05-01',
+          cityName: 'Chicago',
+          locationSource: 'manual',
+          bio: 'Local records and loud rooms.',
+        },
+        bodyMetadata(CompleteOnboardingDetailsDto),
+      ),
+    ).resolves.toEqual(
+      expect.objectContaining({
+        cityName: 'Chicago',
+        locationSource: 'manual',
+      }),
+    );
+  });
+
+  it('rejects invalid structured onboarding location details', async () => {
+    await expect(
+      pipe.transform(
+        {
+          dateOfBirth: '2000-05-01',
+          countryCode: 'USA',
+          cityName: 'Chicago',
+          locationSource: 'manual',
+        },
+        bodyMetadata(CompleteOnboardingDetailsDto),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('accepts supported private review visibility on create', async () => {
+    await expect(
+      pipe.transform(
+        {
+          releaseGroupMbId: 'rg-1',
+          albumTitleSnapshot: 'Album',
+          artistNameSnapshot: 'Artist',
+          visibility: 'private',
         },
         bodyMetadata(CreateReviewDto),
       ),
     ).resolves.toEqual(
       expect.objectContaining({
-        visibility: "private",
+        visibility: 'private',
       }),
     );
   });
 
-  it("rejects unsupported review visibility on update", async () => {
+  it('rejects unsupported review visibility on update', async () => {
     await expect(
       pipe.transform(
         {
-          visibility: "friends",
+          visibility: 'friends',
         },
         bodyMetadata(UpdateReviewDto),
       ),

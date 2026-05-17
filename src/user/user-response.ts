@@ -1,31 +1,38 @@
-import { User } from "./user.entity";
+import { User } from './user.entity';
 
 export const toPublicUserResponse = (user: User) => ({
-    id: user.id,
-    username: user.username,
-    displayName: user.displayName ?? null,
-    bio: user.bio ?? null,
-    avatarUrl: user.avatarUrl ?? null,
-    bannerUrl: user.bannerUrl ?? null,
-    location: user.location ?? null,
-    websiteUrl: user.websiteUrl ?? null,
-    favoriteGenres: user.favoriteGenres ?? [],
-    favoriteArtists: user.favoriteArtists ?? [],
-    followersCount: user.followersCount ?? 0,
-    followingCount: user.followingCount ?? 0,
-    reviewsCount: user.reviewsCount ?? 0,
-    likesReceivedCount: user.likesReceivedCount ?? 0,
-    createdAt: user.createdAt,
-    updatedAt: user.updatedAt,
+  id: user.id,
+  username: user.username,
+  displayName: user.displayName ?? null,
+  bio: user.bio ?? null,
+  avatarUrl: user.avatarUrl ?? null,
+  bannerUrl: user.bannerUrl ?? null,
+  location: user.location ?? null,
+  websiteUrl: user.websiteUrl ?? null,
+  favoriteGenres: user.favoriteGenres ?? [],
+  favoriteArtists: user.favoriteArtists ?? [],
+  followersCount: user.followersCount ?? 0,
+  followingCount: user.followingCount ?? 0,
+  reviewsCount: user.reviewsCount ?? 0,
+  likesReceivedCount: user.likesReceivedCount ?? 0,
+  createdAt: user.createdAt,
+  updatedAt: user.updatedAt,
 });
 
 export const toSelfUserResponse = (user: User) => ({
-    ...toPublicUserResponse(user),
-    email: user.email ?? null,
-    dateOfBirth: user.dateOfBirth ?? null,
-    country: user.country ?? null,
-    city: user.city ?? null,
+  ...toPublicUserResponse(user),
+  email: user.email ?? null,
+  dateOfBirth: user.dateOfBirth ?? null,
+  country: user.country ?? null,
+  city: user.city ?? null,
+  countryCode: user.countryCode ?? null,
+  countryName: user.country ?? null,
+  cityName: user.city ?? null,
+  regionName: user.regionName ?? null,
+  latitude: user.latitude ?? null,
+  longitude: user.longitude ?? null,
+  locationSource: user.locationSource ?? null,
 });
 
 export const toPublicUserResponses = (users: User[]) =>
-    users.map((user) => toPublicUserResponse(user));
+  users.map((user) => toPublicUserResponse(user));

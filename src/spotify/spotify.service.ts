@@ -86,11 +86,14 @@ export class SpotifyService {
         : 3600;
 
     if (!accessToken) {
-      throw new BadGatewayException('Spotify token response was missing a token');
+      throw new BadGatewayException(
+        'Spotify token response was missing a token',
+      );
     }
 
     this.cachedToken = accessToken;
-    this.tokenExpiresAt = Date.now() + Math.max(expiresInSeconds - 60, 30) * 1000;
+    this.tokenExpiresAt =
+      Date.now() + Math.max(expiresInSeconds - 60, 30) * 1000;
 
     return accessToken;
   }
@@ -109,7 +112,10 @@ export class SpotifyService {
     return this.tokenPromise;
   }
 
-  private buildApiUrl(pathname: string, query?: Record<string, string | number | undefined>) {
+  private buildApiUrl(
+    pathname: string,
+    query?: Record<string, string | number | undefined>,
+  ) {
     const url = new URL(`${this.apiBaseUrl}${pathname}`);
 
     if (query) {
@@ -277,7 +283,9 @@ export class SpotifyService {
       throw new BadRequestException('albumId is required');
     }
 
-    return this.fetchSpotifyJson(`/albums/${encodeURIComponent(albumId.trim())}`);
+    return this.fetchSpotifyJson(
+      `/albums/${encodeURIComponent(albumId.trim())}`,
+    );
   }
 
   async getAlbumTracks(albumId: string) {
@@ -292,12 +300,7 @@ export class SpotifyService {
     return response.items ?? [];
   }
 
-  async searchAlbums(
-    query: string,
-    limit = 10,
-    offset = 0,
-    market?: string,
-  ) {
+  async searchAlbums(query: string, limit = 10, offset = 0, market?: string) {
     const normalizedQuery = this.normalizeSearchQuery(query);
     const normalizedLimit = this.normalizeLimit(limit);
     const normalizedOffset = this.normalizeOffset(offset);
@@ -330,7 +333,9 @@ export class SpotifyService {
       throw new BadRequestException('artistId is required');
     }
 
-    return this.fetchSpotifyJson(`/artists/${encodeURIComponent(artistId.trim())}`);
+    return this.fetchSpotifyJson(
+      `/artists/${encodeURIComponent(artistId.trim())}`,
+    );
   }
 
   async getArtistByName(name: string) {

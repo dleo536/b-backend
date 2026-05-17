@@ -5,25 +5,25 @@ import {
   JoinColumn,
   ManyToOne,
   PrimaryColumn,
-} from "typeorm";
-import { User } from "./user.entity";
+} from 'typeorm';
+import { User } from './user.entity';
 
-@Entity("user_follows")
-@Index("IDX_user_follows_followerId", ["followerId"])
-@Index("IDX_user_follows_followingId", ["followingId"])
+@Entity('user_follows')
+@Index('IDX_user_follows_followerId', ['followerId'])
+@Index('IDX_user_follows_followingId', ['followingId'])
 export class UserFollow {
-  @PrimaryColumn("uuid")
+  @PrimaryColumn('uuid')
   followerId: string;
 
-  @PrimaryColumn("uuid")
+  @PrimaryColumn('uuid')
   followingId: string;
 
-  @ManyToOne(() => User, { onDelete: "CASCADE" })
-  @JoinColumn({ name: "followerId" })
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'followerId' })
   follower: User;
 
-  @ManyToOne(() => User, { onDelete: "CASCADE" })
-  @JoinColumn({ name: "followingId" })
+  @ManyToOne(() => User, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'followingId' })
   following: User;
 
   @CreateDateColumn()
