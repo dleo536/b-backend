@@ -10,9 +10,21 @@ import { Repository, ILike, In, Not, QueryFailedError } from 'typeorm';
 import { CreateUserDto } from './dto/create-user.dto';
 import { CompleteOnboardingDetailsDto } from './dto/complete-onboarding-details.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { LocationSourceValues, User } from './user.entity';
+import { AuthProvider, LocationSourceValues, User } from './user.entity';
 import { UserFollow } from './follow.entity';
 import { ModerationService } from '../moderation/moderation.service';
+
+type CreateUserOptions = {
+  oauthId: string;
+  authProvider?: User['authProvider'];
+  emailVerifiedAt?: Date;
+  lastLoginAt?: Date;
+};
+
+type CreateUserResult = {
+  user: User;
+  created: boolean;
+};
 
 @Injectable()
 export class UserService {
@@ -406,7 +418,15 @@ export class UserService {
     };
   }
 
-  async create(createUserDto: CreateUserDto, oauthId: string) {
+  async create(
+    createUserDto: CreateUserDto,
+    {
+      oauthId,
+      authProvider = AuthProvider.LOCAL,
+      emailVerifiedAt,
+      lastLoginAt,
+    }: CreateUserOptions,
+  ): Promise<CreateUserResult> {
     if (!oauthId) {
       throw new BadRequestException('Authenticated Firebase uid is required');
     }
@@ -418,7 +438,10 @@ export class UserService {
 
     const existingOauthUser = await this.findByOauthId(oauthId);
     if (existingOauthUser) {
-      return existingOauthUser;
+      return {
+        user: existingOauthUser,
+        created: false,
+      };
     }
 
     const existingUsername = await this.userRepository.findOne({
@@ -487,7 +510,10 @@ export class UserService {
       usernameLower: normalizedUsername.toLowerCase(),
       email: normalizedEmail,
       emailLower: normalizedEmail,
+      authProvider,
       oauthId,
+      emailVerifiedAt,
+      lastLoginAt,
       displayName: displayName || undefined,
       bio: normalizedBio,
       dateOfBirth: normalizedDateOfBirth,
@@ -506,7 +532,10 @@ export class UserService {
 
     try {
       const result = await this.userRepository.save(user);
-      return result;
+      return {
+        user: result,
+        created: true,
+      };
     } catch (error) {
       const mappedError = this.mapUniqueConstraintError(error);
       if (mappedError) {

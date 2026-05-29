@@ -3,7 +3,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { UserService } from './user.service';
-import { User } from './user.entity';
+import { AuthProvider, User } from './user.entity';
 import { UserFollow } from './follow.entity';
 import { ModerationService } from '../moderation/moderation.service';
 
@@ -179,7 +179,7 @@ describe('UserService follow behavior', () => {
           firstName: 'Taken',
           lastName: 'User',
         } as any,
-        'firebase-uid-1',
+        { oauthId: 'firebase-uid-1' },
       ),
     ).rejects.toBeInstanceOf(ConflictException);
   });
@@ -200,7 +200,7 @@ describe('UserService follow behavior', () => {
           firstName: 'Fresh',
           lastName: 'User',
         } as any,
-        'firebase-uid-1',
+        { oauthId: 'firebase-uid-1' },
       ),
     ).rejects.toBeInstanceOf(ConflictException);
   });
@@ -214,9 +214,48 @@ describe('UserService follow behavior', () => {
           firstName: 'Fresh',
           lastName: 'User',
         } as any,
-        'firebase-uid-1',
+        { oauthId: 'firebase-uid-1' },
       ),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('create stores google auth metadata for new oauth users', async () => {
+    (userRepository.findOne as jest.Mock).mockResolvedValue(null);
+    (userRepository.create as jest.Mock).mockImplementation((value) => value);
+    (userRepository.save as jest.Mock).mockImplementation(async (value) => value);
+
+    const emailVerifiedAt = new Date('2026-05-26T12:00:00.000Z');
+    const lastLoginAt = new Date('2026-05-26T12:00:01.000Z');
+    const result = await service.create(
+      {
+        username: 'FreshName',
+        email: 'fresh@example.com',
+        firstName: 'Fresh',
+        lastName: 'User',
+      } as any,
+      {
+        oauthId: 'google-oauth-uid',
+        authProvider: AuthProvider.GOOGLE,
+        emailVerifiedAt,
+        lastLoginAt,
+      },
+    );
+
+    expect(userRepository.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        authProvider: AuthProvider.GOOGLE,
+        oauthId: 'google-oauth-uid',
+        emailVerifiedAt,
+        lastLoginAt,
+      }),
+    );
+    expect(result).toEqual({
+      created: true,
+      user: expect.objectContaining({
+        authProvider: AuthProvider.GOOGLE,
+        oauthId: 'google-oauth-uid',
+      }),
+    });
   });
 
   it('checkAvailability reports username availability without exposing email existence', async () => {

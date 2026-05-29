@@ -26,6 +26,7 @@ import {
   toPublicUserResponses,
   toSelfUserResponse,
 } from './user-response';
+import { AuthProvider, type User } from './user.entity';
 
 const parseNonNegativeInt = (
   value: string | undefined,
@@ -49,6 +50,16 @@ export class UserController {
     private readonly moderationService: ModerationService,
   ) {}
 
+  private mapFirebaseProvider(
+    firebaseProvider?: string,
+  ): User['authProvider'] {
+    if (firebaseProvider === 'google.com') {
+      return AuthProvider.GOOGLE;
+    }
+
+    return AuthProvider.LOCAL;
+  }
+
   @UseGuards(FirebaseAuthGuard)
   @Post()
   create(
@@ -56,8 +67,18 @@ export class UserController {
     @CurrentUser() currentUser: AuthenticatedUser,
   ) {
     return this.userService
-      .create(createUserDto, currentUser.uid)
-      .then((user) => toSelfUserResponse(user));
+      .create(createUserDto, {
+        oauthId: currentUser.uid,
+        authProvider: this.mapFirebaseProvider(
+          currentUser.firebase?.sign_in_provider,
+        ),
+        emailVerifiedAt: currentUser.email_verified ? new Date() : undefined,
+        lastLoginAt: new Date(),
+      })
+      .then(({ user, created }) => ({
+        created,
+        user: toSelfUserResponse(user),
+      }));
   }
 
   @Post('availability')
