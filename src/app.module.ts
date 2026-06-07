@@ -9,6 +9,7 @@ import { SpotifyModule } from './spotify/spotify.module';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ModerationModule } from './moderation/moderation.module';
+import { CommentModule } from './comment/comment.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { ModerationModule } from './moderation/moderation.module';
     UserModule,
     ListModule,
     ReviewModule,
+    CommentModule,
     SpotifyModule,
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({

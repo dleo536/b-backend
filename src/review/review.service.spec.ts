@@ -11,6 +11,7 @@ import { Review } from './review.entity';
 import { User } from '../user/user.entity';
 import { UserFollow } from '../user/follow.entity';
 import { AuthUserContextService } from '../auth/auth-user-context.service';
+import { ModerationService } from '../moderation/moderation.service';
 
 type MockRepository<T> = Partial<Record<keyof Repository<T>, jest.Mock>>;
 
@@ -22,6 +23,7 @@ describe('ReviewService', () => {
   let authUserContextService: Partial<
     Record<keyof AuthUserContextService, jest.Mock>
   >;
+  let moderationService: Partial<Record<keyof ModerationService, jest.Mock>>;
 
   beforeEach(async () => {
     reviewRepository = {
@@ -46,6 +48,11 @@ describe('ReviewService', () => {
     authUserContextService = {
       requireAdminByOauthId: jest.fn(),
     };
+    moderationService = {
+      assertTextFieldsAreAllowed: jest.fn(),
+      getVisibilityExcludedUserIds: jest.fn().mockResolvedValue([]),
+      isBlockedBetweenUsersByIds: jest.fn().mockResolvedValue(false),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -65,6 +72,10 @@ describe('ReviewService', () => {
         {
           provide: AuthUserContextService,
           useValue: authUserContextService,
+        },
+        {
+          provide: ModerationService,
+          useValue: moderationService,
         },
       ],
     }).compile();
