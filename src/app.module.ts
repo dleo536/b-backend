@@ -10,6 +10,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ModerationModule } from './moderation/moderation.module';
 import { CommentModule } from './comment/comment.module';
+import { RecentReleaseModule } from './recent-release/recent-release.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { CommentModule } from './comment/comment.module';
     ListModule,
     ReviewModule,
     CommentModule,
+    RecentReleaseModule,
     SpotifyModule,
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
