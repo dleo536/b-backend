@@ -10,6 +10,7 @@ import { In, Not, Repository } from 'typeorm';
 import { CreateReviewDto } from './dto/create-review.dto';
 import { UpdateReviewDto } from './dto/update-review.dto';
 import { Review, ReviewVisibility } from './review.entity';
+import { ReviewLike } from './review-like.entity';
 import { User } from '../user/user.entity';
 import { UserFollow } from '../user/follow.entity';
 import { AuthUserContextService } from '../auth/auth-user-context.service';
@@ -24,6 +25,8 @@ export class ReviewService {
     private userRepository: Repository<User>,
     @InjectRepository(UserFollow)
     private followRepository: Repository<UserFollow>,
+    @InjectRepository(ReviewLike)
+    private reviewLikeRepository: Repository<ReviewLike>,
     private readonly authUserContextService: AuthUserContextService,
     private readonly moderationService: ModerationService,
   ) {}
@@ -476,6 +479,133 @@ export class ReviewService {
     }
 
     return this.normalizeReviewForResponse(review);
+  }
+
+  async likeReview(reviewId: string, viewerIdentifier: string) {
+    const viewer = await this.findUserByIdentifier(viewerIdentifier);
+    if (!viewer) {
+      throw new NotFoundException('Viewer not found');
+    }
+    const review = await this.findOne(reviewId, viewerIdentifier);
+
+    const existingLike = await this.reviewLikeRepository.findOne({
+      where: {
+        userId: viewer.id,
+        reviewId: review.id,
+      },
+    });
+
+    if (existingLike) {
+      return {
+        success: true,
+        liked: true,
+        reviewId: review.id,
+        userId: viewer.id,
+        likesCount: review.likesCount ?? 0,
+      };
+    }
+
+    const like = this.reviewLikeRepository.create({
+      userId: viewer.id,
+      reviewId: review.id,
+    });
+    await this.reviewLikeRepository.save(like);
+
+    review.likesCount = (review.likesCount ?? 0) + 1;
+    await this.reviewRepository.save(review);
+
+    return {
+      success: true,
+      liked: true,
+      reviewId: review.id,
+      userId: viewer.id,
+      likesCount: review.likesCount,
+    };
+  }
+
+  async unlikeReview(reviewId: string, viewerIdentifier: string) {
+    const viewer = await this.findUserByIdentifier(viewerIdentifier);
+    if (!viewer) {
+      throw new NotFoundException('Viewer not found');
+    }
+    const review = await this.findOne(reviewId, viewerIdentifier);
+
+    const existingLike = await this.reviewLikeRepository.findOne({
+      where: {
+        userId: viewer.id,
+        reviewId: review.id,
+      },
+    });
+
+    if (existingLike) {
+      await this.reviewLikeRepository.remove(existingLike);
+      review.likesCount = Math.max(0, (review.likesCount ?? 0) - 1);
+      await this.reviewRepository.save(review);
+    }
+
+    return {
+      success: true,
+      liked: false,
+      reviewId: review.id,
+      userId: viewer.id,
+      likesCount: review.likesCount ?? 0,
+    };
+  }
+
+  async isReviewLiked(reviewId: string, viewerIdentifier: string) {
+    const viewer = await this.findUserByIdentifier(viewerIdentifier);
+    if (!viewer) {
+      throw new NotFoundException('Viewer not found');
+    }
+    const review = await this.findOne(reviewId, viewerIdentifier);
+
+    const existingLike = await this.reviewLikeRepository.findOne({
+      where: {
+        userId: viewer.id,
+        reviewId: review.id,
+      },
+    });
+
+    return {
+      liked: Boolean(existingLike),
+      reviewId: review.id,
+      userId: viewer.id,
+      likesCount: review.likesCount ?? 0,
+    };
+  }
+
+  async getLikedReviews(
+    targetIdentifier: string,
+    viewerIdentifier?: string,
+    offset: number = 0,
+    limit: number = 50,
+  ) {
+    const targetUser = await this.findUserByIdentifier(targetIdentifier);
+    if (!targetUser) {
+      return { data: [], hasMore: false, totalCount: 0 };
+    }
+
+    const viewerUser = await this.findUserByIdentifier(viewerIdentifier);
+    const viewerUserId = viewerUser?.id ?? null;
+    const likes = await this.reviewLikeRepository.find({
+      where: { userId: targetUser.id },
+      relations: ['review'],
+      order: { createdAt: 'DESC' },
+    });
+
+    const likedReviews = likes
+      .map((like) => like.review)
+      .filter((review): review is Review => Boolean(review))
+      .filter((review) => this.canViewReview(review, viewerUserId));
+
+    const totalCount = likedReviews.length;
+    const paginatedReviews = likedReviews.slice(offset, offset + limit);
+
+    return {
+      data: this.normalizeReviewsForResponse(paginatedReviews),
+      hasMore: offset + paginatedReviews.length < totalCount,
+      totalCount,
+    };
   }
 
   async update(

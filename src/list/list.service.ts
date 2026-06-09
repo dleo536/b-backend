@@ -635,6 +635,40 @@ export class ListService {
     };
   }
 
+  async getLikedListsForUser(
+    targetIdentifier: string,
+    viewerIdentifier?: string,
+    offset: number = 0,
+    limit: number = 50,
+  ) {
+    const targetUser = await this.findUserByIdentifier(targetIdentifier);
+    if (!targetUser) {
+      return { data: [], hasMore: false, totalCount: 0 };
+    }
+
+    const viewerUser = await this.findUserByIdentifier(viewerIdentifier);
+    const viewerUserId = viewerUser?.id ?? null;
+    const likes = await this.listLikeRepository.find({
+      where: { userId: targetUser.id },
+      relations: ['list'],
+      order: { createdAt: 'DESC' },
+    });
+
+    const likedLists = likes
+      .map((like) => like.list)
+      .filter((list): list is AlbumList => Boolean(list))
+      .filter((list) => this.canViewList(list, viewerUserId));
+
+    const totalCount = likedLists.length;
+    const paginatedLists = likedLists.slice(offset, offset + limit);
+
+    return {
+      data: paginatedLists,
+      hasMore: offset + paginatedLists.length < totalCount,
+      totalCount,
+    };
+  }
+
   async update(
     id: string,
     updateListDto: UpdateListDto,

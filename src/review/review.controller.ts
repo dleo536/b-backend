@@ -76,6 +76,51 @@ export class ReviewController {
   }
 
   @UseGuards(OptionalFirebaseAuthGuard)
+  @Get('users/:id/liked')
+  getLikedReviews(
+    @Param('id') id: string,
+    @Query('offset') offset?: string,
+    @Query('limit') limit?: string,
+    @CurrentUser() currentUser?: AuthenticatedUser,
+  ) {
+    const offsetNum = parseNonNegativeInt(offset, 0, 200);
+    const limitNum = parseNonNegativeInt(limit, 50, 200);
+    return this.reviewService
+      .getLikedReviews(id, currentUser?.uid, offsetNum, limitNum)
+      .then((result) => ({
+        ...result,
+        data: toReviewResponses(result.data),
+      }));
+  }
+
+  @UseGuards(FirebaseAuthGuard)
+  @Post(':id/like')
+  likeReview(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.reviewService.likeReview(id, currentUser.uid);
+  }
+
+  @UseGuards(FirebaseAuthGuard)
+  @Delete(':id/like')
+  unlikeReview(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.reviewService.unlikeReview(id, currentUser.uid);
+  }
+
+  @UseGuards(FirebaseAuthGuard)
+  @Get(':id/is-liked')
+  isLiked(
+    @Param('id') id: string,
+    @CurrentUser() currentUser: AuthenticatedUser,
+  ) {
+    return this.reviewService.isReviewLiked(id, currentUser.uid);
+  }
+
+  @UseGuards(OptionalFirebaseAuthGuard)
   @Get(':id')
   findOne(
     @Param('id') id: string,

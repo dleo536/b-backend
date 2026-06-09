@@ -8,6 +8,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ReviewService } from './review.service';
 import { Review } from './review.entity';
+import { ReviewLike } from './review-like.entity';
 import { User } from '../user/user.entity';
 import { UserFollow } from '../user/follow.entity';
 import { AuthUserContextService } from '../auth/auth-user-context.service';
@@ -20,6 +21,7 @@ describe('ReviewService', () => {
   let reviewRepository: MockRepository<Review>;
   let userRepository: MockRepository<User>;
   let followRepository: MockRepository<UserFollow>;
+  let reviewLikeRepository: MockRepository<ReviewLike>;
   let authUserContextService: Partial<
     Record<keyof AuthUserContextService, jest.Mock>
   >;
@@ -45,6 +47,14 @@ describe('ReviewService', () => {
       find: jest.fn(),
     };
 
+    reviewLikeRepository = {
+      find: jest.fn(),
+      findOne: jest.fn(),
+      create: jest.fn(),
+      save: jest.fn(),
+      remove: jest.fn(),
+    };
+
     authUserContextService = {
       requireAdminByOauthId: jest.fn(),
     };
@@ -68,6 +78,10 @@ describe('ReviewService', () => {
         {
           provide: getRepositoryToken(UserFollow),
           useValue: followRepository,
+        },
+        {
+          provide: getRepositoryToken(ReviewLike),
+          useValue: reviewLikeRepository,
         },
         {
           provide: AuthUserContextService,

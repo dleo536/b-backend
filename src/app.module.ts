@@ -11,6 +11,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ModerationModule } from './moderation/moderation.module';
 import { CommentModule } from './comment/comment.module';
 import { RecentReleaseModule } from './recent-release/recent-release.module';
+import { TidalModule } from './tidal/tidal.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { RecentReleaseModule } from './recent-release/recent-release.module';
     CommentModule,
     RecentReleaseModule,
     SpotifyModule,
+    TidalModule,
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'postgres',

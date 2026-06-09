@@ -94,6 +94,24 @@ export class ListController {
   }
 
   @UseGuards(OptionalFirebaseAuthGuard)
+  @Get('users/:id/liked')
+  getUserLikedLists(
+    @Param('id') id: string,
+    @Query('offset') offset?: string,
+    @Query('limit') limit?: string,
+    @CurrentUser() currentUser?: AuthenticatedUser,
+  ) {
+    const offsetNum = parseNonNegativeInt(offset, 0, 200);
+    const limitNum = parseNonNegativeInt(limit, 50, 200);
+    return this.listService
+      .getLikedListsForUser(id, currentUser?.uid, offsetNum, limitNum)
+      .then((result) => ({
+        ...result,
+        data: toListResponses(result.data),
+      }));
+  }
+
+  @UseGuards(OptionalFirebaseAuthGuard)
   @Get('detail/:id')
   getDetail(
     @Param('id') id: string,

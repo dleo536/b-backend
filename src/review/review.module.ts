@@ -4,11 +4,12 @@ import { ReviewService } from './review.service';
 import { ReviewController } from './review.controller';
 import { AdminReviewController } from './admin-review.controller';
 import { Review } from './review.entity';
+import { ReviewLike } from './review-like.entity';
 import { User } from '../user/user.entity';
 import { UserFollow } from '../user/follow.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Review, User, UserFollow])],
+  imports: [TypeOrmModule.forFeature([Review, ReviewLike, User, UserFollow])],
   controllers: [ReviewController, AdminReviewController],
   providers: [ReviewService],
 })
