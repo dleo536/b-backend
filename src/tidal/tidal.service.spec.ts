@@ -77,6 +77,75 @@ describe('TidalService', () => {
           }),
           { status: 200 },
         ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: '123',
+                type: 'albums',
+                attributes: {
+                  title: 'Blonde',
+                  releaseDate: '2016-08-20',
+                },
+                relationships: {
+                  artists: {
+                    data: [{ id: '456', type: 'artists' }],
+                  },
+                },
+              },
+            ],
+            included: [
+              {
+                id: '456',
+                type: 'artists',
+                attributes: {
+                  name: 'Frank Ocean',
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                id: '789',
+                type: 'artworks',
+              },
+            ],
+            included: [
+              {
+                id: '789',
+                type: 'artworks',
+                attributes: {
+                  mediaType: 'IMAGE',
+                  files: [
+                    {
+                      href: 'https://example.com/blonde-small.jpg',
+                      meta: {
+                        width: 80,
+                        height: 80,
+                      },
+                    },
+                    {
+                      href: 'https://example.com/blonde.jpg',
+                      meta: {
+                        width: 640,
+                        height: 640,
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          }),
+          { status: 200 },
+        ),
       );
 
     const result = await service.searchAlbums('  blonde  ', 500, 'us');
@@ -89,10 +158,26 @@ describe('TidalService', () => {
     expect(searchUrl.searchParams.get('explicitFilter')).toBe('INCLUDE');
     expect(searchUrl.searchParams.get('include')).toBe('albums');
     expect(searchUrl.searchParams.has('page[limit]')).toBe(false);
+    const albumsUrl = new URL((global.fetch as jest.Mock).mock.calls[2][0]);
+    expect(albumsUrl.pathname).toBe('/v2/albums');
+    expect(albumsUrl.searchParams.get('include')).toBe('artists');
+    expect(albumsUrl.searchParams.getAll('filter[id]')).toEqual(['123']);
+    const coverArtUrl = new URL((global.fetch as jest.Mock).mock.calls[3][0]);
+    expect(coverArtUrl.pathname).toBe(
+      '/v2/albums/123/relationships/coverArt',
+    );
+    expect(coverArtUrl.searchParams.get('countryCode')).toBe('US');
+    expect(coverArtUrl.searchParams.get('include')).toBe('coverArt');
     expect(result.items).toEqual([
       expect.objectContaining({
         id: '123',
         title: 'Blonde',
+        coverUrl: 'https://example.com/blonde.jpg',
+        artists: [
+          expect.objectContaining({
+            name: 'Frank Ocean',
+          }),
+        ],
       }),
     ]);
   });

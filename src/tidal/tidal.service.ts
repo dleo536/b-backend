@@ -111,13 +111,22 @@ export class TidalService {
 
   private buildApiUrl(
     pathname: string,
-    query?: Record<string, string | number | undefined>,
+    query?: Record<string, string | number | string[] | undefined>,
   ) {
     const url = new URL(`${this.apiBaseUrl}${pathname}`);
 
     if (query) {
       for (const [key, value] of Object.entries(query)) {
         if (value === undefined || value === null || value === '') {
+          continue;
+        }
+
+        if (Array.isArray(value)) {
+          for (const item of value) {
+            if (item !== undefined && item !== null && item !== '') {
+              url.searchParams.append(key, String(item));
+            }
+          }
           continue;
         }
 
@@ -130,7 +139,7 @@ export class TidalService {
 
   private getResponseCacheKey(
     pathname: string,
-    query?: Record<string, string | number | undefined>,
+    query?: Record<string, string | number | string[] | undefined>,
   ): string {
     return this.buildApiUrl(pathname, query).toString();
   }
@@ -207,7 +216,7 @@ export class TidalService {
 
   private async fetchTidalJsonUncached<T>(
     pathname: string,
-    query?: Record<string, string | number | undefined>,
+    query?: Record<string, string | number | string[] | undefined>,
     retry = true,
   ): Promise<T> {
     const token = await this.getAccessToken();
@@ -242,7 +251,7 @@ export class TidalService {
 
   private async fetchTidalJson<T>(
     pathname: string,
-    query?: Record<string, string | number | undefined>,
+    query?: Record<string, string | number | string[] | undefined>,
   ): Promise<T> {
     const cacheKey = this.getResponseCacheKey(pathname, query);
     const cachedResponse = this.getCachedResponse<T>(cacheKey);
@@ -266,7 +275,7 @@ export class TidalService {
     return this.inFlightRequests.get(cacheKey) as Promise<T>;
   }
 
-  private normalizeAlbumSearchItems(rawResponse: any) {
+  private getIncludedById(rawResponse: any) {
     const includedById = new Map<string, any>();
 
     for (const item of Array.isArray(rawResponse?.included)
@@ -276,6 +285,70 @@ export class TidalService {
         includedById.set(`${item.type}:${item.id}`, item);
       }
     }
+
+    return includedById;
+  }
+
+  private getTidalImageUrl(artwork: any) {
+    const attributes = artwork?.attributes || {};
+    const files = Array.isArray(attributes.files) ? attributes.files : [];
+    const largestFile = files
+      .filter((file) => file?.href)
+      .sort((left, right) => {
+        const leftPixels =
+          Number(left?.meta?.width || 0) * Number(left?.meta?.height || 0);
+        const rightPixels =
+          Number(right?.meta?.width || 0) * Number(right?.meta?.height || 0);
+        return rightPixels - leftPixels;
+      })[0];
+
+    if (largestFile?.href) {
+      return largestFile.href;
+    }
+
+    const imageLinks = attributes.imageLinks || attributes.image_links;
+
+    if (Array.isArray(imageLinks)) {
+      const firstImage = imageLinks.find(Boolean);
+      return typeof firstImage === 'string'
+        ? firstImage
+        : firstImage?.href || firstImage?.url || null;
+    }
+
+    if (imageLinks && typeof imageLinks === 'object') {
+      return (
+        imageLinks.large ||
+        imageLinks.medium ||
+        imageLinks.small ||
+        imageLinks.href ||
+        imageLinks.url ||
+        null
+      );
+    }
+
+    return (
+      attributes.url ||
+      attributes.href ||
+      attributes.imageUrl ||
+      attributes.image_url ||
+      attributes.coverUrl ||
+      attributes.cover_url ||
+      null
+    );
+  }
+
+  private getRelationshipData(resource: any, relationshipName: string) {
+    const relationshipData = resource?.relationships?.[relationshipName]?.data;
+
+    if (Array.isArray(relationshipData)) {
+      return relationshipData;
+    }
+
+    return relationshipData ? [relationshipData] : [];
+  }
+
+  private normalizeAlbumSearchItems(rawResponse: any) {
+    const includedById = this.getIncludedById(rawResponse);
 
     const relationshipItems = Array.isArray(rawResponse?.data)
       ? rawResponse.data
@@ -287,11 +360,7 @@ export class TidalService {
       const album =
         includedById.get(`${item?.type || 'albums'}:${item?.id}`) || item;
       const attributes = album?.attributes || {};
-      const artistRelationships = Array.isArray(
-        album?.relationships?.artists?.data,
-      )
-        ? album.relationships.artists.data
-        : [];
+      const artistRelationships = this.getRelationshipData(album, 'artists');
       const artists = artistRelationships
         .map((artist) => includedById.get(`${artist.type}:${artist.id}`))
         .filter(Boolean)
@@ -300,6 +369,10 @@ export class TidalService {
           name: artist.attributes?.name || null,
           raw: artist,
         }));
+      const coverArtRelationships = this.getRelationshipData(album, 'coverArt');
+      const coverArt = coverArtRelationships
+        .map((artwork) => includedById.get(`${artwork.type}:${artwork.id}`))
+        .find(Boolean);
 
       return {
         id: album?.id || item?.id || null,
@@ -307,9 +380,62 @@ export class TidalService {
         releaseDate: attributes.releaseDate || attributes.release_date || null,
         barcodeId: attributes.barcodeId || null,
         artists,
+        coverUrl: this.getTidalImageUrl(coverArt),
+        coverArt: coverArt || null,
         raw: album,
       };
     });
+  }
+
+  private async getAlbumMetadataByIds(albumIds: string[], countryCode: string) {
+    if (albumIds.length === 0) {
+      return null;
+    }
+
+    return this.fetchTidalJson('/albums', {
+      countryCode,
+      include: 'artists',
+      'filter[id]': albumIds,
+    });
+  }
+
+  private normalizeCoverArtRelationship(rawResponse: any) {
+    const includedById = this.getIncludedById(rawResponse);
+    const coverArtItems = Array.isArray(rawResponse?.data)
+      ? rawResponse.data
+      : rawResponse?.data
+        ? [rawResponse.data]
+        : [];
+    const coverArt = coverArtItems
+      .map((artwork) => includedById.get(`${artwork.type}:${artwork.id}`))
+      .filter(Boolean)
+      .map((artwork) => ({
+        id: artwork.id,
+        coverUrl: this.getTidalImageUrl(artwork),
+        raw: artwork,
+      }))
+      .find((artwork) => artwork.coverUrl);
+
+    return coverArt || null;
+  }
+
+  private async getAlbumCoverArt(albumId: string, countryCode: string) {
+    const rawResponse = await this.fetchTidalJson(
+      `/albums/${encodeURIComponent(albumId)}/relationships/coverArt`,
+      {
+        countryCode,
+        include: 'coverArt',
+      },
+    );
+
+    const coverArt = this.normalizeCoverArtRelationship(rawResponse);
+
+    return {
+      id: coverArt?.id || null,
+      coverUrl: coverArt?.coverUrl || null,
+      raw: coverArt?.raw || null,
+      rawResponse,
+    };
   }
 
   async searchAlbums(
@@ -331,13 +457,46 @@ export class TidalService {
         'page[cursor]': cursor,
       },
     );
+    const searchItems = this.normalizeAlbumSearchItems(rawResponse).slice(
+      0,
+      normalizedLimit,
+    );
+    const albumIds = searchItems
+      .map((album) => album.id)
+      .filter((albumId): albumId is string => Boolean(albumId));
+    const albumMetadataResponse = await this.getAlbumMetadataByIds(
+      albumIds,
+      normalizedCountryCode,
+    );
+    const metadataItems = albumMetadataResponse
+      ? this.normalizeAlbumSearchItems(albumMetadataResponse)
+      : [];
+    const metadataById = new Map(
+      metadataItems.map((album) => [album.id, album]),
+    );
+    const coverArtResults = await Promise.all(
+      albumIds.map(async (albumId) => [
+        albumId,
+        await this.getAlbumCoverArt(albumId, normalizedCountryCode),
+      ] as const),
+    );
+    const coverArtByAlbumId = new Map(coverArtResults);
 
     return {
-      items: this.normalizeAlbumSearchItems(rawResponse).slice(
-        0,
-        normalizedLimit,
-      ),
+      items: searchItems.map((album) => {
+        const metadataAlbum = metadataById.get(album.id) || album;
+        const coverArt = coverArtByAlbumId.get(album.id) as
+          | { coverUrl?: string | null; raw?: unknown }
+          | undefined;
+
+        return {
+          ...metadataAlbum,
+          coverUrl: coverArt?.coverUrl || metadataAlbum.coverUrl || null,
+          coverArt: coverArt?.raw || metadataAlbum.coverArt || null,
+        };
+      }),
       raw: rawResponse,
+      albumMetadataRaw: albumMetadataResponse,
       countryCode: normalizedCountryCode,
     };
   }
