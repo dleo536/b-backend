@@ -200,4 +200,30 @@ describe('TidalService', () => {
       BadGatewayException,
     );
   });
+
+  it('includes rate limit headers when TIDAL returns 429', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            access_token: 'token-123',
+            expires_in: 86400,
+          }),
+          { status: 200 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response('', {
+          status: 429,
+          headers: {
+            'retry-after': '60',
+            'x-ratelimit-remaining': '0',
+          },
+        }),
+      );
+
+    await expect(service.searchAlbums('blonde')).rejects.toThrow(
+      'retry-after=60',
+    );
+  });
 });

@@ -2,6 +2,7 @@ import {
   BadGatewayException,
   BadRequestException,
   Injectable,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 
@@ -17,6 +18,7 @@ type TidalResponseCacheEntry = {
 
 @Injectable()
 export class TidalService {
+  private readonly logger = new Logger(TidalService.name);
   private readonly authUrl = 'https://auth.tidal.com/v1/oauth2/token';
   private readonly apiBaseUrl = 'https://openapi.tidal.com/v2';
   private readonly maxSearchLimit = 20;
@@ -50,6 +52,43 @@ export class TidalService {
     }
   }
 
+  private getTidalDiagnosticHeaders(response: Response) {
+    const diagnosticHeaderNames = [
+      'retry-after',
+      'x-ratelimit-limit',
+      'x-ratelimit-remaining',
+      'x-ratelimit-reset',
+      'x-rate-limit-limit',
+      'x-rate-limit-remaining',
+      'x-rate-limit-reset',
+      'ratelimit-limit',
+      'ratelimit-remaining',
+      'ratelimit-reset',
+      'tidal-ratelimit-limit',
+      'tidal-ratelimit-remaining',
+      'tidal-ratelimit-reset',
+    ];
+    const headers: Record<string, string> = {};
+
+    for (const headerName of diagnosticHeaderNames) {
+      const value = response.headers.get(headerName);
+      if (value) {
+        headers[headerName] = value;
+      }
+    }
+
+    return headers;
+  }
+
+  private formatDiagnosticHeaders(headers: Record<string, string>) {
+    const entries = Object.entries(headers);
+    if (entries.length === 0) {
+      return 'none';
+    }
+
+    return entries.map(([key, value]) => `${key}=${value}`).join(', ');
+  }
+
   private async requestNewAccessToken(): Promise<string> {
     const { clientId, clientSecret } = this.getCredentials();
     const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString(
@@ -69,10 +108,25 @@ export class TidalService {
 
     if (!response.ok) {
       const errorBody = await response.text();
+      const diagnosticHeaders = this.getTidalDiagnosticHeaders(response);
+      this.logger.warn(
+        `TIDAL token request failed status=${response.status} rateHeaders=${this.formatDiagnosticHeaders(
+          diagnosticHeaders,
+        )} body=${errorBody.slice(0, 500) || 'empty'}`,
+      );
       throw new BadGatewayException(
         `TIDAL token request failed (${response.status}): ${
           errorBody.slice(0, 180) || 'unknown error'
-        }`,
+        } rateHeaders=${this.formatDiagnosticHeaders(diagnosticHeaders)}`,
+      );
+    }
+
+    if (response.status === 429) {
+      const diagnosticHeaders = this.getTidalDiagnosticHeaders(response);
+      this.logger.warn(
+        `TIDAL token rate limit status=429 rateHeaders=${this.formatDiagnosticHeaders(
+          diagnosticHeaders,
+        )}`,
       );
     }
 
@@ -239,10 +293,18 @@ export class TidalService {
 
     if (!response.ok) {
       const errorBody = await response.text();
+      const diagnosticHeaders = this.getTidalDiagnosticHeaders(response);
+      const rateHeaderText = this.formatDiagnosticHeaders(diagnosticHeaders);
+      const bodySnippet = errorBody.slice(0, 500) || 'empty';
+      this.logger.warn(
+        `TIDAL API request failed status=${response.status} path=${pathname} query=${JSON.stringify(
+          query ?? {},
+        )} rateHeaders=${rateHeaderText} body=${bodySnippet}`,
+      );
       throw new BadGatewayException(
         `TIDAL API request failed (${response.status}): ${
           errorBody.slice(0, 180) || 'unknown error'
-        }`,
+        } rateHeaders=${rateHeaderText}`,
       );
     }
 

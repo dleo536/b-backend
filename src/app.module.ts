@@ -12,6 +12,7 @@ import { ModerationModule } from './moderation/moderation.module';
 import { CommentModule } from './comment/comment.module';
 import { RecentReleaseModule } from './recent-release/recent-release.module';
 import { TidalModule } from './tidal/tidal.module';
+import { AppleMusicModule } from './apple-music/apple-music.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { TidalModule } from './tidal/tidal.module';
     RecentReleaseModule,
     SpotifyModule,
     TidalModule,
+    AppleMusicModule,
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'postgres',
