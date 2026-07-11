@@ -11,8 +11,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ModerationModule } from './moderation/moderation.module';
 import { CommentModule } from './comment/comment.module';
 import { RecentReleaseModule } from './recent-release/recent-release.module';
-import { TidalModule } from './tidal/tidal.module';
-import { AppleMusicModule } from './apple-music/apple-music.module';
+import { MusicBrainzModule } from './musicbrainz/musicbrainz.module';
+import { MusicSearchModule } from './music-search/music-search.module';
 
 @Module({
   imports: [
@@ -24,8 +24,8 @@ import { AppleMusicModule } from './apple-music/apple-music.module';
     CommentModule,
     RecentReleaseModule,
     SpotifyModule,
-    TidalModule,
-    AppleMusicModule,
+    MusicBrainzModule,
+    MusicSearchModule,
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'postgres',

@@ -84,6 +84,21 @@ describe('AppleMusicService', () => {
                     },
                     trackCount: 17,
                     genreNames: ['R&B/Soul'],
+                    isSingle: false,
+                  },
+                },
+                {
+                  id: '999',
+                  type: 'albums',
+                  attributes: {
+                    name: 'Blonde Demo - Single',
+                    artistName: 'Frank Ocean',
+                    releaseDate: '2016-08-20',
+                    artwork: {
+                      url: 'https://example.com/{w}x{h}{c}.{f}',
+                    },
+                    trackCount: 1,
+                    isSingle: true,
                   },
                 },
               ],
@@ -116,6 +131,7 @@ describe('AppleMusicService', () => {
         ],
       }),
     ]);
+    expect(result.items).toHaveLength(1);
   });
 
   it('throws when Apple Music credentials are missing', async () => {

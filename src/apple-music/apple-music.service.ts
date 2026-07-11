@@ -378,28 +378,30 @@ export class AppleMusicService {
       ? rawResponse.results.albums.data
       : [];
 
-    return albums.map((album) => {
-      const attributes = album?.attributes || {};
-      const artistName = attributes.artistName || 'Unknown Artist';
-      const coverUrl = this.getAppleMusicImageUrl(attributes.artwork);
+    return albums
+      .filter((album) => album?.attributes?.isSingle !== true)
+      .map((album) => {
+        const attributes = album?.attributes || {};
+        const artistName = attributes.artistName || 'Unknown Artist';
+        const coverUrl = this.getAppleMusicImageUrl(attributes.artwork);
 
-      return {
-        id: album?.id || null,
-        title: attributes.name || null,
-        releaseDate: attributes.releaseDate || null,
-        barcodeId: attributes.upc || null,
-        artists: [{ id: null, name: artistName, raw: null }],
-        artistName,
-        coverUrl,
-        artwork: attributes.artwork || null,
-        trackCount: attributes.trackCount || null,
-        genreNames: Array.isArray(attributes.genreNames)
-          ? attributes.genreNames
-          : [],
-        url: attributes.url || null,
-        raw: album,
-      };
-    });
+        return {
+          id: album?.id || null,
+          title: attributes.name || null,
+          releaseDate: attributes.releaseDate || null,
+          barcodeId: attributes.upc || null,
+          artists: [{ id: null, name: artistName, raw: null }],
+          artistName,
+          coverUrl,
+          artwork: attributes.artwork || null,
+          trackCount: attributes.trackCount || null,
+          genreNames: Array.isArray(attributes.genreNames)
+            ? attributes.genreNames
+            : [],
+          url: attributes.url || null,
+          raw: album,
+        };
+      });
   }
 
   async searchAlbums(

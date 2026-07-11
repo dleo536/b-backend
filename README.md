@@ -50,6 +50,18 @@ $  npm run typeorm:cli -- migration:generate src/migrations/InitialSchema -d src
 npm run typeorm:cli -- migration:run -d src/data-source.ts
 ```
 
+## Music search configuration
+
+```bash
+MUSIC_SEARCH_PROVIDER=musicbrainz
+MUSICBRAINZ_BASE_URL=https://musicbrainz-sample.bsides.pro/ws/2
+COVER_ART_ARCHIVE_BASE_URL=https://coverartarchive.org
+```
+
+Set `MUSIC_SEARCH_PROVIDER=spotify` to route the shared search endpoints back
+through the existing Spotify provider. The Spotify module and endpoints remain
+available either way. Apple Music and TIDAL modules are not imported by default.
+
 ## Run tests
 
 ```bash
