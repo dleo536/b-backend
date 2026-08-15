@@ -1,4 +1,3 @@
-import { BadGatewayException } from '@nestjs/common';
 import { MusicBrainzService } from './musicbrainz.service';
 
 describe('MusicBrainzService', () => {
@@ -11,7 +10,7 @@ describe('MusicBrainzService', () => {
     jest.useFakeTimers();
     process.env = {
       ...originalEnv,
-      MUSICBRAINZ_BASE_URL: 'https://musicbrainz-sample.bsides.pro/ws/2',
+      MUSICBRAINZ_BASE_URL: 'https://musicbrainz-full.bsides.pro/ws/2',
       COVER_ART_ARCHIVE_BASE_URL: 'https://coverartarchive.org',
     };
     global.fetch = mockFetch;
@@ -80,10 +79,9 @@ describe('MusicBrainzService', () => {
     const searchUrl = new URL(mockFetch.mock.calls[0][0].toString());
     const coverArtUrl = new URL(mockFetch.mock.calls[1][0].toString());
 
+    expect(searchUrl.origin).toBe('https://musicbrainz-full.bsides.pro');
     expect(searchUrl.pathname).toBe('/ws/2/release-group');
-    expect(searchUrl.searchParams.get('query')).toBe(
-      'releasegroup:The AND primarytype:album',
-    );
+    expect(searchUrl.searchParams.get('query')).toBe('releasegroup:"The"');
     expect(searchUrl.searchParams.get('fmt')).toBe('json');
     expect(searchUrl.searchParams.get('limit')).toBe('20');
     expect(coverArtUrl.pathname).toBe('/release-group/rg-album');
@@ -104,6 +102,21 @@ describe('MusicBrainzService', () => {
         source: 'musicbrainz',
       }),
     ]);
+  });
+
+  it('reads the MusicBrainz base URL from env', async () => {
+    process.env.MUSICBRAINZ_BASE_URL = 'https://metadata.example/ws/2/';
+    service = new MusicBrainzService();
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ artists: [] }), { status: 200 }),
+    );
+
+    const result = await service.searchArtists('Ice Cube');
+    const searchUrl = new URL(mockFetch.mock.calls[0][0].toString());
+
+    expect(searchUrl.origin).toBe('https://metadata.example');
+    expect(searchUrl.pathname).toBe('/ws/2/artist');
+    expect(result).toEqual([]);
   });
 
   it('does not fail album search when Cover Art Archive returns 404', async () => {
@@ -159,7 +172,7 @@ describe('MusicBrainzService', () => {
     const searchUrl = new URL(mockFetch.mock.calls[0][0].toString());
 
     expect(searchUrl.pathname).toBe('/ws/2/artist');
-    expect(searchUrl.searchParams.get('query')).toBe('artist:Ice Cube');
+    expect(searchUrl.searchParams.get('query')).toBe('artist:"Ice Cube"');
     expect(searchUrl.searchParams.get('offset')).toBe('10');
     expect(result).toEqual([
       {
@@ -178,11 +191,44 @@ describe('MusicBrainzService', () => {
     ]);
   });
 
-  it('fails MusicBrainz request errors while keeping cover art failures isolated', async () => {
-    mockFetch.mockResolvedValueOnce(new Response('bad gateway', { status: 502 }));
-
-    await expect(service.searchArtists('Ice Cube')).rejects.toBeInstanceOf(
-      BadGatewayException,
+  it('does not fall back to the sample URL when full MusicBrainz fails', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response('bad gateway', { status: 502 }),
     );
+
+    const result = await service.searchArtists('Ice Cube');
+    const searchUrl = new URL(mockFetch.mock.calls[0][0].toString());
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(searchUrl.origin).toBe('https://musicbrainz-full.bsides.pro');
+    expect(searchUrl.toString()).not.toContain('musicbrainz-sample.bsides.pro');
+    expect(result).toEqual({
+      items: [],
+      provider: 'musicbrainz',
+      providerUnavailable: true,
+      error: expect.stringContaining('MusicBrainz request failed (502)'),
+    });
+  });
+
+  it('returns a safe providerUnavailable response when MusicBrainz times out', async () => {
+    mockFetch.mockImplementationOnce(
+      (_url: URL, options: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options.signal?.addEventListener('abort', () => {
+            reject(new DOMException('The operation was aborted', 'AbortError'));
+          });
+        }),
+    );
+
+    const resultPromise = service.searchArtists('Ice Cube');
+    jest.advanceTimersByTime(7000);
+    const result = await resultPromise;
+
+    expect(result).toEqual({
+      items: [],
+      provider: 'musicbrainz',
+      providerUnavailable: true,
+      error: 'MusicBrainz request timed out',
+    });
   });
 });
