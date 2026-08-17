@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  Optional,
+} from '@nestjs/common';
+import { AppleMusicService } from '../apple-music/apple-music.service';
 
 type CacheEntry<T> = {
   expiresAt: number;
@@ -22,6 +28,9 @@ export type NormalizedAlbumSearchResult = {
   images: Array<{ url: string }>;
   coverUrl: string | null;
   coverArtUrl: string | null;
+  coverArtSource: CoverArtSource;
+  coverArtProvider: CoverArtProvider | null;
+  coverArtAttribution: string | null;
   musicbrainzReleaseGroupId: string;
   musicbrainzArtistId: string | null;
   primaryType: string;
@@ -51,6 +60,23 @@ export type MusicBrainzUnavailableSearchResult = {
   error: string;
 };
 
+type CoverArtProvider = 'cover_art_archive' | 'apple_music';
+
+type CoverArtSource =
+  | 'cover_art_archive_release'
+  | 'cover_art_archive_release_group'
+  | 'apple_music'
+  | null;
+
+type ResolvedCoverArt = {
+  url: string;
+  source: Exclude<CoverArtSource, null>;
+  provider: CoverArtProvider;
+  attribution: string | null;
+  musicbrainzReleaseId?: string | null;
+  appleMusicAlbumId?: string | null;
+};
+
 @Injectable()
 export class MusicBrainzService {
   private readonly logger = new Logger(MusicBrainzService.name);
@@ -65,7 +91,16 @@ export class MusicBrainzService {
   private readonly coverArtTimeoutMs = 2500;
   private readonly cacheTtlMs = 10 * 60 * 1000;
   private readonly coverArtCache = new Map<string, CacheEntry<string | null>>();
+  private readonly resolvedCoverArtCache = new Map<
+    string,
+    CacheEntry<ResolvedCoverArt | null>
+  >();
   private readonly responseCache = new Map<string, CacheEntry<unknown>>();
+
+  constructor(
+    @Optional()
+    private readonly appleMusicService?: AppleMusicService,
+  ) {}
 
   private get musicBrainzBaseUrl() {
     return (
@@ -269,16 +304,19 @@ export class MusicBrainzService {
     }
   }
 
-  private async fetchCoverArtJson(releaseGroupMbid: string) {
-    const cacheKey = releaseGroupMbid;
+  private async fetchCoverArtArchiveUrl(
+    entityType: 'release' | 'release-group',
+    mbid: string,
+  ) {
+    const cacheKey = `${entityType}:${mbid}`;
     const cached = this.getCached(this.coverArtCache, cacheKey);
     if (cached !== undefined) {
       return cached;
     }
 
     const url = new URL(
-      `${this.coverArtArchiveBaseUrl}/release-group/${encodeURIComponent(
-        releaseGroupMbid,
+      `${this.coverArtArchiveBaseUrl}/${entityType}/${encodeURIComponent(
+        mbid,
       )}`,
     );
     const controller = new AbortController();
@@ -407,6 +445,206 @@ export class MusicBrainzService {
     );
   }
 
+  private async fetchReleaseGroupReleases(releaseGroupMbid: string) {
+    const url = this.buildMusicBrainzUrl(
+      `/release-group/${encodeURIComponent(releaseGroupMbid)}`,
+      {
+        inc: 'releases',
+        fmt: 'json',
+      },
+    );
+    const response = await this.fetchJson<{ releases?: any[] }>(url);
+
+    return Array.isArray(response?.releases) ? response.releases : [];
+  }
+
+  private sortCandidateReleases(releases: any[]) {
+    return releases
+      .filter((release) => typeof release?.id === 'string' && release.id)
+      .sort((left, right) => {
+        const leftOfficial = left?.status === 'Official' ? 0 : 1;
+        const rightOfficial = right?.status === 'Official' ? 0 : 1;
+        if (leftOfficial !== rightOfficial) {
+          return leftOfficial - rightOfficial;
+        }
+
+        const leftDate =
+          typeof left?.date === 'string' && left.date ? left.date : '9999';
+        const rightDate =
+          typeof right?.date === 'string' && right.date ? right.date : '9999';
+
+        return leftDate.localeCompare(rightDate);
+      });
+  }
+
+  private normalizeComparableText(value: string | null | undefined) {
+    return (value || '')
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/&/g, ' and ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  private releaseYearFromDate(value: string | null | undefined) {
+    return typeof value === 'string' && value.length >= 4
+      ? Number.parseInt(value.slice(0, 4), 10)
+      : null;
+  }
+
+  private appleAlbumMatches(
+    album: any,
+    title: string,
+    artistName: string,
+    releaseYear: string | null,
+  ) {
+    const titleKey = this.normalizeComparableText(title);
+    const candidateTitleKey = this.normalizeComparableText(album?.title);
+    const artistKey = this.normalizeComparableText(artistName);
+    const candidateArtistKey = this.normalizeComparableText(album?.artistName);
+
+    if (!titleKey || !candidateTitleKey || titleKey !== candidateTitleKey) {
+      return false;
+    }
+
+    if (
+      artistKey &&
+      candidateArtistKey &&
+      !candidateArtistKey.includes(artistKey) &&
+      !artistKey.includes(candidateArtistKey)
+    ) {
+      return false;
+    }
+
+    const expectedYear = this.releaseYearFromDate(releaseYear);
+    const candidateYear = this.releaseYearFromDate(album?.releaseDate);
+    if (
+      expectedYear !== null &&
+      candidateYear !== null &&
+      Math.abs(expectedYear - candidateYear) > 1
+    ) {
+      return false;
+    }
+
+    return typeof album?.coverUrl === 'string' && album.coverUrl.trim();
+  }
+
+  private async fetchAppleMusicCoverArt(
+    title: string,
+    artistName: string,
+    releaseYear: string | null,
+  ): Promise<ResolvedCoverArt | null> {
+    if (!this.appleMusicService) {
+      return null;
+    }
+
+    try {
+      const response = await this.appleMusicService.searchAlbums(
+        `${title} ${artistName}`.trim(),
+        5,
+      );
+      const items = Array.isArray((response as any)?.items)
+        ? (response as any).items
+        : [];
+      const matchedAlbum = items.find((album) =>
+        this.appleAlbumMatches(album, title, artistName, releaseYear),
+      );
+
+      if (!matchedAlbum?.coverUrl) {
+        return null;
+      }
+
+      return {
+        url: matchedAlbum.coverUrl,
+        source: 'apple_music',
+        provider: 'apple_music',
+        attribution: 'Artwork provided by Apple Music',
+        appleMusicAlbumId: matchedAlbum.id || null,
+      };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'apple_music',
+          fallbackFor: 'cover_art',
+          error:
+            (error as Error)?.message ||
+            'Apple Music cover art fallback failed',
+        }),
+      );
+      return null;
+    }
+  }
+
+  private async resolveCoverArt(
+    releaseGroup: any,
+  ): Promise<ResolvedCoverArt | null> {
+    const releaseGroupMbid =
+      typeof releaseGroup?.id === 'string' ? releaseGroup.id : null;
+    if (!releaseGroupMbid) {
+      return null;
+    }
+
+    const cacheKey = `resolved:${releaseGroupMbid}`;
+    const cached = this.getCached(this.resolvedCoverArtCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const releases = await this.fetchReleaseGroupReleases(releaseGroupMbid);
+    const candidateReleases = this.sortCandidateReleases(releases).slice(0, 6);
+
+    for (const release of candidateReleases) {
+      const releaseCoverUrl = await this.fetchCoverArtArchiveUrl(
+        'release',
+        release.id,
+      );
+
+      if (releaseCoverUrl) {
+        const resolvedCoverArt: ResolvedCoverArt = {
+          url: releaseCoverUrl,
+          source: 'cover_art_archive_release',
+          provider: 'cover_art_archive',
+          attribution: 'Cover art from Cover Art Archive',
+          musicbrainzReleaseId: release.id,
+        };
+        this.setCached(this.resolvedCoverArtCache, cacheKey, resolvedCoverArt);
+        return resolvedCoverArt;
+      }
+    }
+
+    const releaseGroupCoverUrl = await this.fetchCoverArtArchiveUrl(
+      'release-group',
+      releaseGroupMbid,
+    );
+    if (releaseGroupCoverUrl) {
+      const resolvedCoverArt: ResolvedCoverArt = {
+        url: releaseGroupCoverUrl,
+        source: 'cover_art_archive_release_group',
+        provider: 'cover_art_archive',
+        attribution: 'Cover art from Cover Art Archive',
+        musicbrainzReleaseId: null,
+      };
+      this.setCached(this.resolvedCoverArtCache, cacheKey, resolvedCoverArt);
+      return resolvedCoverArt;
+    }
+
+    const artist = this.getReleaseGroupArtist(releaseGroup);
+    const title = releaseGroup?.title || 'Untitled Album';
+    const firstReleaseDate =
+      typeof releaseGroup?.['first-release-date'] === 'string'
+        ? releaseGroup['first-release-date']
+        : null;
+    const appleCoverArt = await this.fetchAppleMusicCoverArt(
+      title,
+      artist.name,
+      firstReleaseDate,
+    );
+
+    this.setCached(this.resolvedCoverArtCache, cacheKey, appleCoverArt);
+    return appleCoverArt;
+  }
+
   private getReleaseGroupArtist(releaseGroup: any) {
     const firstCredit = Array.isArray(releaseGroup?.['artist-credit'])
       ? releaseGroup['artist-credit'].find((credit) => credit?.artist)
@@ -426,7 +664,7 @@ export class MusicBrainzService {
 
   private normalizeReleaseGroup(
     releaseGroup: any,
-    coverArtUrl: string | null,
+    coverArt: ResolvedCoverArt | null,
   ): NormalizedAlbumSearchResult | null {
     if (!this.isAlbumReleaseGroup(releaseGroup) || !releaseGroup?.id) {
       return null;
@@ -446,6 +684,7 @@ export class MusicBrainzService {
           (secondaryType) => typeof secondaryType === 'string',
         )
       : [];
+    const coverArtUrl = coverArt?.url || null;
 
     return {
       id: releaseGroup.id,
@@ -460,6 +699,9 @@ export class MusicBrainzService {
       images: coverArtUrl ? [{ url: coverArtUrl }] : [],
       coverUrl: coverArtUrl,
       coverArtUrl,
+      coverArtSource: coverArt?.source || null,
+      coverArtProvider: coverArt?.provider || null,
+      coverArtAttribution: coverArt?.attribution || null,
       musicbrainzReleaseGroupId: releaseGroup.id,
       musicbrainzArtistId: artist.id,
       primaryType: releaseGroup['primary-type'],
@@ -498,7 +740,9 @@ export class MusicBrainzService {
     const normalizedLimit = this.normalizeLimit(limit);
     const normalizedOffset = this.normalizeOffset(offset);
     const url = this.buildMusicBrainzUrl('/release-group', {
-      query: `releasegroup:"${this.escapeLucenePhrase(normalizedQuery)}"`,
+      query: `releasegroup:"${this.escapeLucenePhrase(
+        normalizedQuery,
+      )}" AND primarytype:"album"`,
       fmt: 'json',
       limit: normalizedLimit,
       offset: normalizedOffset > 0 ? normalizedOffset : undefined,
@@ -511,15 +755,18 @@ export class MusicBrainzService {
             this.isAlbumReleaseGroup(releaseGroup),
           )
         : [];
-      const coverArtUrls = await Promise.all(
+      const coverArtResults = await Promise.all(
         releaseGroups.map((releaseGroup) =>
-          releaseGroup?.id ? this.fetchCoverArtJson(releaseGroup.id) : null,
+          releaseGroup?.id ? this.resolveCoverArt(releaseGroup) : null,
         ),
       );
 
       return releaseGroups
         .map((releaseGroup, index) =>
-          this.normalizeReleaseGroup(releaseGroup, coverArtUrls[index] || null),
+          this.normalizeReleaseGroup(
+            releaseGroup,
+            coverArtResults[index] || null,
+          ),
         )
         .filter(
           (album): album is NormalizedAlbumSearchResult => album !== null,
@@ -555,6 +802,9 @@ export class MusicBrainzService {
       throw new BadRequestException('releaseGroupMbid is required');
     }
 
-    return this.fetchCoverArtJson(releaseGroupMbid.trim());
+    return this.fetchCoverArtArchiveUrl(
+      'release-group',
+      releaseGroupMbid.trim(),
+    );
   }
 }

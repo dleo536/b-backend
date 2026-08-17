@@ -59,6 +59,16 @@ describe('MusicBrainzService', () => {
     mockFetch.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
+          releases: [
+            { id: 'release-album', status: 'Official', date: '1992-03-01' },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
           images: [
             {
               front: true,
@@ -77,14 +87,19 @@ describe('MusicBrainzService', () => {
 
     const result = await service.searchAlbums('The', 20);
     const searchUrl = new URL(mockFetch.mock.calls[0][0].toString());
-    const coverArtUrl = new URL(mockFetch.mock.calls[1][0].toString());
+    const releasesUrl = new URL(mockFetch.mock.calls[1][0].toString());
+    const coverArtUrl = new URL(mockFetch.mock.calls[2][0].toString());
 
     expect(searchUrl.origin).toBe('https://musicbrainz-full.bsides.pro');
     expect(searchUrl.pathname).toBe('/ws/2/release-group');
-    expect(searchUrl.searchParams.get('query')).toBe('releasegroup:"The"');
+    expect(searchUrl.searchParams.get('query')).toBe(
+      'releasegroup:"The" AND primarytype:"album"',
+    );
     expect(searchUrl.searchParams.get('fmt')).toBe('json');
     expect(searchUrl.searchParams.get('limit')).toBe('20');
-    expect(coverArtUrl.pathname).toBe('/release-group/rg-album');
+    expect(releasesUrl.pathname).toBe('/ws/2/release-group/rg-album');
+    expect(releasesUrl.searchParams.get('inc')).toBe('releases');
+    expect(coverArtUrl.pathname).toBe('/release/release-album');
     expect(result).toEqual([
       expect.objectContaining({
         id: 'rg-album',
@@ -99,6 +114,8 @@ describe('MusicBrainzService', () => {
         secondaryTypes: ['Compilation'],
         coverArtUrl: 'https://images.example/500.jpg',
         coverUrl: 'https://images.example/500.jpg',
+        coverArtSource: 'cover_art_archive_release',
+        coverArtProvider: 'cover_art_archive',
         source: 'musicbrainz',
       }),
     ]);
@@ -135,6 +152,9 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ releases: [] }), { status: 200 }),
+    );
     mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
 
     const result = await service.searchAlbums('No Cover');
@@ -144,7 +164,134 @@ describe('MusicBrainzService', () => {
         id: 'rg-no-cover',
         coverArtUrl: null,
         coverUrl: null,
+        coverArtSource: null,
+        coverArtProvider: null,
         images: [],
+      }),
+    ]);
+  });
+
+  it('asks MusicBrainz for album release groups before paging', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ 'release-groups': [] }), { status: 200 }),
+    );
+
+    await service.searchAlbums('b', 10, 10);
+    const searchUrl = new URL(mockFetch.mock.calls[0][0].toString());
+
+    expect(searchUrl.searchParams.get('query')).toBe(
+      'releasegroup:"b" AND primarytype:"album"',
+    );
+    expect(searchUrl.searchParams.get('limit')).toBe('10');
+    expect(searchUrl.searchParams.get('offset')).toBe('10');
+  });
+
+  it('falls back from exact release cover art to release-group cover art', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          'release-groups': [
+            {
+              id: 'rg-group-cover',
+              title: 'Group Cover',
+              'primary-type': 'Album',
+              'artist-credit': [{ artist: { id: 'artist-1', name: 'Artist' } }],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          releases: [{ id: 'release-no-cover', status: 'Official' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          images: [
+            {
+              front: true,
+              thumbnails: { '500': 'https://images.example/group-500.jpg' },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.searchAlbums('Group Cover');
+    const releaseCoverUrl = new URL(mockFetch.mock.calls[2][0].toString());
+    const releaseGroupCoverUrl = new URL(mockFetch.mock.calls[3][0].toString());
+
+    expect(releaseCoverUrl.pathname).toBe('/release/release-no-cover');
+    expect(releaseGroupCoverUrl.pathname).toBe('/release-group/rg-group-cover');
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'rg-group-cover',
+        coverArtUrl: 'https://images.example/group-500.jpg',
+        coverArtSource: 'cover_art_archive_release_group',
+        coverArtProvider: 'cover_art_archive',
+      }),
+    ]);
+  });
+
+  it('falls back to Apple Music artwork when Cover Art Archive has no artwork', async () => {
+    const mockAppleMusicService = {
+      searchAlbums: jest.fn().mockResolvedValue({
+        items: [
+          {
+            id: 'apple-album',
+            title: 'Fallback Album',
+            artistName: 'Fallback Artist',
+            releaseDate: '2001-06-01',
+            coverUrl: 'https://is1-ssl.mzstatic.com/image/thumb/apple.jpg',
+          },
+        ],
+      }),
+    };
+    service = new MusicBrainzService(mockAppleMusicService as any);
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          'release-groups': [
+            {
+              id: 'rg-apple-cover',
+              title: 'Fallback Album',
+              'primary-type': 'Album',
+              'first-release-date': '2001-05-29',
+              'artist-credit': [
+                { artist: { id: 'artist-1', name: 'Fallback Artist' } },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ releases: [] }), { status: 200 }),
+    );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+
+    const result = await service.searchAlbums('Fallback Album');
+
+    expect(mockAppleMusicService.searchAlbums).toHaveBeenCalledWith(
+      'Fallback Album Fallback Artist',
+      5,
+    );
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'rg-apple-cover',
+        coverArtUrl: 'https://is1-ssl.mzstatic.com/image/thumb/apple.jpg',
+        coverArtSource: 'apple_music',
+        coverArtProvider: 'apple_music',
+        coverArtAttribution: 'Artwork provided by Apple Music',
       }),
     ]);
   });
