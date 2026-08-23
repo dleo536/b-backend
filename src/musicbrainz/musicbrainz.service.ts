@@ -77,6 +77,38 @@ type ResolvedCoverArt = {
   appleMusicAlbumId?: string | null;
 };
 
+type AlbumPersonnelTrackCredit = {
+  title: string;
+  position: string | null;
+  roles: string[];
+};
+
+type AlbumPersonnelPerson = {
+  name: string;
+  musicbrainzArtistId: string | null;
+  roles: string[];
+  albumLevelRoles: string[];
+  tracks: AlbumPersonnelTrackCredit[];
+};
+
+type AlbumPersonnelResponse = {
+  releaseGroupMbid: string;
+  releaseMbid: string | null;
+  source: 'musicbrainz';
+  personnel: AlbumPersonnelPerson[];
+};
+
+type MutablePersonnelPerson = {
+  name: string;
+  musicbrainzArtistId: string | null;
+  roles: Set<string>;
+  albumLevelRoles: Set<string>;
+  tracks: Map<
+    string,
+    { title: string; position: string | null; roles: Set<string> }
+  >;
+};
+
 @Injectable()
 export class MusicBrainzService {
   private readonly logger = new Logger(MusicBrainzService.name);
@@ -88,6 +120,7 @@ export class MusicBrainzService {
   private readonly maxSearchOffset = 1000;
   private readonly maxQueryLength = 120;
   private readonly requestTimeoutMs = 7000;
+  private readonly personnelRequestTimeoutMs = 10000;
   private readonly coverArtTimeoutMs = 2500;
   private readonly cacheTtlMs = 10 * 60 * 1000;
   private readonly coverArtCache = new Map<string, CacheEntry<string | null>>();
@@ -493,6 +526,56 @@ export class MusicBrainzService {
       : null;
   }
 
+  private getAlbumSearchRank(
+    album: NormalizedAlbumSearchResult,
+    query: string,
+    originalIndex: number,
+  ) {
+    const titleKey = this.normalizeComparableText(album.title || album.name);
+    const queryKey = this.normalizeComparableText(query);
+    const hasCover = Boolean(album.coverUrl);
+    let titleScore = 0;
+
+    if (queryKey && titleKey === queryKey) {
+      titleScore = 4;
+    } else if (queryKey && titleKey.startsWith(`${queryKey} `)) {
+      titleScore = 3;
+    } else if (queryKey && titleKey.startsWith(queryKey)) {
+      titleScore = 2;
+    } else if (queryKey && titleKey.includes(queryKey)) {
+      titleScore = 1;
+    }
+
+    return {
+      titleScore,
+      coverScore: hasCover ? 1 : 0,
+      originalIndex,
+    };
+  }
+
+  private rankAlbumSearchResults(
+    albums: NormalizedAlbumSearchResult[],
+    query: string,
+  ) {
+    return albums
+      .map((album, index) => ({
+        album,
+        rank: this.getAlbumSearchRank(album, query, index),
+      }))
+      .sort((left, right) => {
+        if (left.rank.titleScore !== right.rank.titleScore) {
+          return right.rank.titleScore - left.rank.titleScore;
+        }
+
+        if (left.rank.coverScore !== right.rank.coverScore) {
+          return right.rank.coverScore - left.rank.coverScore;
+        }
+
+        return left.rank.originalIndex - right.rank.originalIndex;
+      })
+      .map(({ album }) => album);
+  }
+
   private appleAlbumMatches(
     album: any,
     title: string,
@@ -645,6 +728,334 @@ export class MusicBrainzService {
     return appleCoverArt;
   }
 
+  private createEmptyPersonnelResponse(
+    releaseGroupMbid: string,
+    releaseMbid: string | null = null,
+  ): AlbumPersonnelResponse {
+    return {
+      releaseGroupMbid,
+      releaseMbid,
+      source: 'musicbrainz',
+      personnel: [],
+    };
+  }
+
+  private async browseReleaseGroupReleasesForPersonnel(
+    releaseGroupMbid: string,
+  ) {
+    const url = this.buildMusicBrainzUrl('/release', {
+      'release-group': releaseGroupMbid,
+      fmt: 'json',
+      limit: 25,
+      inc: 'artist-credits+media+recordings+labels+release-groups',
+    });
+    const response = await this.fetchJson<{ releases?: any[] }>(
+      url,
+      this.personnelRequestTimeoutMs,
+    );
+
+    return Array.isArray(response?.releases) ? response.releases : [];
+  }
+
+  private getReleaseMediaFormats(release: any) {
+    const media = Array.isArray(release?.media) ? release.media : [];
+
+    return media
+      .map((medium) =>
+        typeof medium?.format === 'string' ? medium.format.toLowerCase() : '',
+      )
+      .filter(Boolean);
+  }
+
+  private releaseHasTracks(release: any) {
+    const media = Array.isArray(release?.media) ? release.media : [];
+
+    return media.some(
+      (medium) => Array.isArray(medium?.tracks) && medium.tracks.length > 0,
+    );
+  }
+
+  private releaseHasRecordings(release: any) {
+    const media = Array.isArray(release?.media) ? release.media : [];
+
+    return media.some((medium) =>
+      Array.isArray(medium?.tracks)
+        ? medium.tracks.some((track) => Boolean(track?.recording?.id))
+        : false,
+    );
+  }
+
+  private releaseHasPreferredFormat(release: any) {
+    const formats = this.getReleaseMediaFormats(release);
+
+    return formats.some(
+      (format) => format.includes('digital media') || format === 'cd',
+    );
+  }
+
+  private releaseHasPreferredCountry(release: any) {
+    const country =
+      typeof release?.country === 'string' ? release.country.toUpperCase() : '';
+
+    return country === 'US' || country === 'XW';
+  }
+
+  private getReleaseSelectionRank(release: any, originalIndex: number) {
+    const date =
+      typeof release?.date === 'string' && release.date ? release.date : '9999';
+
+    return {
+      official: release?.status === 'Official' ? 1 : 0,
+      tracks: this.releaseHasTracks(release) ? 1 : 0,
+      recordings: this.releaseHasRecordings(release) ? 1 : 0,
+      preferredFormat: this.releaseHasPreferredFormat(release) ? 1 : 0,
+      preferredCountry: this.releaseHasPreferredCountry(release) ? 1 : 0,
+      date,
+      originalIndex,
+    };
+  }
+
+  private selectRepresentativeRelease(releases: any[]) {
+    const usableReleases = releases.filter(
+      (release) => typeof release?.id === 'string' && release.id,
+    );
+
+    if (usableReleases.length === 0) {
+      return null;
+    }
+
+    return usableReleases
+      .map((release, index) => ({
+        release,
+        rank: this.getReleaseSelectionRank(release, index),
+      }))
+      .sort((left, right) => {
+        const scoreFields = [
+          'official',
+          'tracks',
+          'recordings',
+          'preferredFormat',
+          'preferredCountry',
+        ] as const;
+
+        for (const field of scoreFields) {
+          if (left.rank[field] !== right.rank[field]) {
+            return right.rank[field] - left.rank[field];
+          }
+        }
+
+        const dateComparison = left.rank.date.localeCompare(right.rank.date);
+        if (dateComparison !== 0) {
+          return dateComparison;
+        }
+
+        return left.rank.originalIndex - right.rank.originalIndex;
+      })[0].release;
+  }
+
+  private async fetchReleaseWithPersonnelRelations(releaseMbid: string) {
+    const url = this.buildMusicBrainzUrl(
+      `/release/${encodeURIComponent(releaseMbid)}`,
+      {
+        fmt: 'json',
+        inc: 'artist-credits+labels+media+recordings+artist-rels+recording-level-rels+work-rels+work-level-rels',
+      },
+    );
+
+    return this.fetchJson<any>(url, this.personnelRequestTimeoutMs);
+  }
+
+  private normalizeRole(value: string | null | undefined) {
+    return typeof value === 'string'
+      ? value.trim().toLowerCase().replace(/\s+/g, ' ')
+      : '';
+  }
+
+  private getRelationRole(relation: any) {
+    return this.normalizeRole(
+      relation?.type ||
+        relation?.['type-id'] ||
+        relation?.attribute ||
+        relation?.attributes?.[0],
+    );
+  }
+
+  private getRelationArtist(relation: any) {
+    const artist = relation?.artist;
+    if (!artist || typeof artist?.name !== 'string' || !artist.name.trim()) {
+      return null;
+    }
+
+    return {
+      id: typeof artist?.id === 'string' ? artist.id : null,
+      name: artist.name.trim(),
+    };
+  }
+
+  private normalizePersonnelKey(name: string) {
+    return name
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
+  }
+
+  private getOrCreatePersonnelPerson(
+    personnelByKey: Map<string, MutablePersonnelPerson>,
+    artist: { id: string | null; name: string },
+  ) {
+    const key = artist.id || this.normalizePersonnelKey(artist.name);
+    let person = personnelByKey.get(key);
+
+    if (!person) {
+      person = {
+        name: artist.name,
+        musicbrainzArtistId: artist.id,
+        roles: new Set(),
+        albumLevelRoles: new Set(),
+        tracks: new Map(),
+      };
+      personnelByKey.set(key, person);
+    } else if (!person.musicbrainzArtistId && artist.id) {
+      person.musicbrainzArtistId = artist.id;
+    }
+
+    return person;
+  }
+
+  private addPersonnelCredit(
+    personnelByKey: Map<string, MutablePersonnelPerson>,
+    relation: any,
+    track?: { title: string; position: string | null },
+  ) {
+    const artist = this.getRelationArtist(relation);
+    const role = this.getRelationRole(relation);
+
+    if (!artist || !role) {
+      return;
+    }
+
+    const person = this.getOrCreatePersonnelPerson(personnelByKey, artist);
+    person.roles.add(role);
+
+    if (!track) {
+      person.albumLevelRoles.add(role);
+      return;
+    }
+
+    const trackKey = `${track.position || ''}:${track.title}`;
+    const trackCredit = person.tracks.get(trackKey) || {
+      title: track.title,
+      position: track.position,
+      roles: new Set<string>(),
+    };
+    trackCredit.roles.add(role);
+    person.tracks.set(trackKey, trackCredit);
+  }
+
+  private getTrackPosition(track: any, medium: any, fallbackIndex: number) {
+    if (typeof track?.number === 'string' && track.number.trim()) {
+      return track.number.trim();
+    }
+
+    if (typeof track?.position === 'number') {
+      return String(track.position);
+    }
+
+    const mediumPosition =
+      typeof medium?.position === 'number' ? `${medium.position}.` : '';
+
+    return `${mediumPosition}${fallbackIndex + 1}`;
+  }
+
+  private addRelationListCredits(
+    personnelByKey: Map<string, MutablePersonnelPerson>,
+    relations: any,
+    track?: { title: string; position: string | null },
+  ) {
+    if (!Array.isArray(relations)) {
+      return;
+    }
+
+    relations.forEach((relation) => {
+      this.addPersonnelCredit(personnelByKey, relation, track);
+
+      if (Array.isArray(relation?.work?.relations)) {
+        relation.work.relations.forEach((workRelation) =>
+          this.addPersonnelCredit(personnelByKey, workRelation, track),
+        );
+      }
+    });
+  }
+
+  private normalizePersonnel(
+    personnelByKey: Map<string, MutablePersonnelPerson>,
+  ) {
+    return Array.from(personnelByKey.values())
+      .map((person) => ({
+        name: person.name,
+        musicbrainzArtistId: person.musicbrainzArtistId,
+        roles: Array.from(person.roles).sort(),
+        albumLevelRoles: Array.from(person.albumLevelRoles).sort(),
+        tracks: Array.from(person.tracks.values())
+          .map((track) => ({
+            title: track.title,
+            position: track.position,
+            roles: Array.from(track.roles).sort(),
+          }))
+          .sort((left, right) => {
+            const leftPosition = Number.parseFloat(left.position || '');
+            const rightPosition = Number.parseFloat(right.position || '');
+
+            if (
+              Number.isFinite(leftPosition) &&
+              Number.isFinite(rightPosition) &&
+              leftPosition !== rightPosition
+            ) {
+              return leftPosition - rightPosition;
+            }
+
+            return (left.position || left.title).localeCompare(
+              right.position || right.title,
+            );
+          }),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  private buildPersonnelFromRelease(release: any) {
+    const personnelByKey = new Map<string, MutablePersonnelPerson>();
+
+    this.addRelationListCredits(personnelByKey, release?.relations);
+
+    const media = Array.isArray(release?.media) ? release.media : [];
+    media.forEach((medium) => {
+      const tracks = Array.isArray(medium?.tracks) ? medium.tracks : [];
+
+      tracks.forEach((track, trackIndex) => {
+        const title =
+          typeof track?.title === 'string' && track.title.trim()
+            ? track.title.trim()
+            : typeof track?.recording?.title === 'string'
+              ? track.recording.title
+              : `Track ${trackIndex + 1}`;
+        const trackContext = {
+          title,
+          position: this.getTrackPosition(track, medium, trackIndex),
+        };
+
+        this.addRelationListCredits(
+          personnelByKey,
+          track?.recording?.relations,
+          trackContext,
+        );
+      });
+    });
+
+    return this.normalizePersonnel(personnelByKey);
+  }
+
   private getReleaseGroupArtist(releaseGroup: any) {
     const firstCredit = Array.isArray(releaseGroup?.['artist-credit'])
       ? releaseGroup['artist-credit'].find((credit) => credit?.artist)
@@ -761,7 +1172,7 @@ export class MusicBrainzService {
         ),
       );
 
-      return releaseGroups
+      const albums = releaseGroups
         .map((releaseGroup, index) =>
           this.normalizeReleaseGroup(
             releaseGroup,
@@ -771,6 +1182,8 @@ export class MusicBrainzService {
         .filter(
           (album): album is NormalizedAlbumSearchResult => album !== null,
         );
+
+      return this.rankAlbumSearchResults(albums, normalizedQuery);
     });
   }
 
@@ -806,5 +1219,82 @@ export class MusicBrainzService {
       'release-group',
       releaseGroupMbid.trim(),
     );
+  }
+
+  async getAlbumPersonnel(
+    releaseGroupMbid: string,
+  ): Promise<AlbumPersonnelResponse> {
+    const normalizedReleaseGroupMbid = releaseGroupMbid?.trim();
+    if (!normalizedReleaseGroupMbid) {
+      throw new BadRequestException('releaseGroupMbid is required');
+    }
+
+    const startedAt = Date.now();
+    let selectedReleaseMbid: string | null = null;
+
+    try {
+      const releases = await this.browseReleaseGroupReleasesForPersonnel(
+        normalizedReleaseGroupMbid,
+      );
+      const selectedRelease = this.selectRepresentativeRelease(releases);
+      selectedReleaseMbid =
+        typeof selectedRelease?.id === 'string' ? selectedRelease.id : null;
+
+      if (!selectedReleaseMbid) {
+        const response = this.createEmptyPersonnelResponse(
+          normalizedReleaseGroupMbid,
+        );
+        this.logger.log(
+          JSON.stringify({
+            provider: 'musicbrainz',
+            feature: 'album_personnel',
+            releaseGroupMbid: normalizedReleaseGroupMbid,
+            releaseMbid: null,
+            durationMs: Date.now() - startedAt,
+            personnelCount: 0,
+          }),
+        );
+        return response;
+      }
+
+      const release =
+        await this.fetchReleaseWithPersonnelRelations(selectedReleaseMbid);
+      const personnel = this.buildPersonnelFromRelease(release);
+
+      this.logger.log(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'album_personnel',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          releaseMbid: selectedReleaseMbid,
+          durationMs: Date.now() - startedAt,
+          personnelCount: personnel.length,
+        }),
+      );
+
+      return {
+        releaseGroupMbid: normalizedReleaseGroupMbid,
+        releaseMbid: selectedReleaseMbid,
+        source: 'musicbrainz',
+        personnel,
+      };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'album_personnel',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          releaseMbid: selectedReleaseMbid,
+          durationMs: Date.now() - startedAt,
+          error:
+            (error as Error)?.message || 'MusicBrainz personnel lookup failed',
+        }),
+      );
+
+      return this.createEmptyPersonnelResponse(
+        normalizedReleaseGroupMbid,
+        selectedReleaseMbid,
+      );
+    }
   }
 }

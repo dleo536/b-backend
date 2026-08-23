@@ -13,6 +13,7 @@ import { CommentModule } from './comment/comment.module';
 import { RecentReleaseModule } from './recent-release/recent-release.module';
 import { MusicBrainzModule } from './musicbrainz/musicbrainz.module';
 import { MusicSearchModule } from './music-search/music-search.module';
+import { AlbumModule } from './album/album.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { MusicSearchModule } from './music-search/music-search.module';
     SpotifyModule,
     MusicBrainzModule,
     MusicSearchModule,
+    AlbumModule,
     ConfigModule.forRoot({ isGlobal: true }),
     TypeOrmModule.forRoot({
       type: 'postgres',

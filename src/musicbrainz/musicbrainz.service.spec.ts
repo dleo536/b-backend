@@ -296,6 +296,280 @@ describe('MusicBrainzService', () => {
     ]);
   });
 
+  it('prioritizes stronger title matches before cover art availability', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          'release-groups': [
+            {
+              id: 'rg-exact-no-cover',
+              title: 'Blue',
+              'primary-type': 'Album',
+              'artist-credit': [
+                { artist: { id: 'artist-1', name: 'Exact Artist' } },
+              ],
+            },
+            {
+              id: 'rg-covered-partial',
+              title: 'The Blue Sessions',
+              'primary-type': 'Album',
+              'artist-credit': [
+                { artist: { id: 'artist-2', name: 'Covered Artist' } },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ releases: [] }), { status: 200 }),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          releases: [{ id: 'release-covered', status: 'Official' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          images: [
+            {
+              front: true,
+              thumbnails: { '500': 'https://images.example/covered.jpg' },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.searchAlbums('blue');
+
+    expect(result.map((album) => album.id)).toEqual([
+      'rg-exact-no-cover',
+      'rg-covered-partial',
+    ]);
+  });
+
+  it('prioritizes covered albums when title match quality is equal', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          'release-groups': [
+            {
+              id: 'rg-no-cover',
+              title: 'Blue Weekend',
+              'primary-type': 'Album',
+              'artist-credit': [
+                { artist: { id: 'artist-1', name: 'No Cover Artist' } },
+              ],
+            },
+            {
+              id: 'rg-with-cover',
+              title: 'Blue Train',
+              'primary-type': 'Album',
+              'artist-credit': [
+                { artist: { id: 'artist-2', name: 'Cover Artist' } },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ releases: [] }), { status: 200 }),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          releases: [{ id: 'release-with-cover', status: 'Official' }],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          images: [
+            {
+              front: true,
+              thumbnails: { '500': 'https://images.example/with-cover.jpg' },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.searchAlbums('blue');
+
+    expect(result.map((album) => album.id)).toEqual([
+      'rg-with-cover',
+      'rg-no-cover',
+    ]);
+  });
+
+  it('selects a representative release and groups personnel credits by person', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          releases: [
+            {
+              id: 'release-promo',
+              status: 'Promotion',
+              date: '2000-01-01',
+              media: [],
+            },
+            {
+              id: 'release-official',
+              status: 'Official',
+              country: 'US',
+              date: '1999-01-01',
+              media: [
+                {
+                  format: 'Digital Media',
+                  position: 1,
+                  tracks: [
+                    {
+                      id: 'track-1',
+                      number: '1',
+                      title: 'First Track',
+                      recording: { id: 'recording-1' },
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'release-official',
+          relations: [
+            {
+              type: 'mastering',
+              artist: { id: 'artist-master', name: 'Master Person' },
+            },
+          ],
+          media: [
+            {
+              position: 1,
+              tracks: [
+                {
+                  number: '1',
+                  title: 'First Track',
+                  recording: {
+                    id: 'recording-1',
+                    relations: [
+                      {
+                        type: 'producer',
+                        artist: { id: 'artist-producer', name: 'Producer One' },
+                      },
+                      {
+                        type: 'mix',
+                        artist: { id: 'artist-producer', name: 'Producer One' },
+                      },
+                      {
+                        type: 'performance',
+                        work: {
+                          id: 'work-1',
+                          relations: [
+                            {
+                              type: 'composer',
+                              artist: {
+                                id: 'artist-composer',
+                                name: 'Composer One',
+                              },
+                            },
+                          ],
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.getAlbumPersonnel('rg-personnel');
+    const browseUrl = new URL(mockFetch.mock.calls[0][0].toString());
+    const releaseUrl = new URL(mockFetch.mock.calls[1][0].toString());
+
+    expect(browseUrl.pathname).toBe('/ws/2/release');
+    expect(browseUrl.searchParams.get('release-group')).toBe('rg-personnel');
+    expect(releaseUrl.pathname).toBe('/ws/2/release/release-official');
+    expect(result).toEqual({
+      releaseGroupMbid: 'rg-personnel',
+      releaseMbid: 'release-official',
+      source: 'musicbrainz',
+      personnel: [
+        {
+          name: 'Composer One',
+          musicbrainzArtistId: 'artist-composer',
+          roles: ['composer'],
+          albumLevelRoles: [],
+          tracks: [
+            {
+              title: 'First Track',
+              position: '1',
+              roles: ['composer'],
+            },
+          ],
+        },
+        {
+          name: 'Master Person',
+          musicbrainzArtistId: 'artist-master',
+          roles: ['mastering'],
+          albumLevelRoles: ['mastering'],
+          tracks: [],
+        },
+        {
+          name: 'Producer One',
+          musicbrainzArtistId: 'artist-producer',
+          roles: ['mix', 'producer'],
+          albumLevelRoles: [],
+          tracks: [
+            {
+              title: 'First Track',
+              position: '1',
+              roles: ['mix', 'producer'],
+            },
+          ],
+        },
+      ],
+    });
+  });
+
+  it('returns safe empty personnel when MusicBrainz has no usable release', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ releases: [] }), { status: 200 }),
+    );
+
+    const result = await service.getAlbumPersonnel('rg-empty');
+
+    expect(result).toEqual({
+      releaseGroupMbid: 'rg-empty',
+      releaseMbid: null,
+      source: 'musicbrainz',
+      personnel: [],
+    });
+  });
+
   it('searches and normalizes artists', async () => {
     mockFetch.mockResolvedValueOnce(
       new Response(
