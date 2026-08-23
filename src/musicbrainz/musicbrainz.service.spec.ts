@@ -74,9 +74,12 @@ describe('MusicBrainzService', () => {
               front: true,
               image: 'https://images.example/original.jpg',
               thumbnails: {
-                '250': 'https://images.example/250.jpg',
-                '500': 'https://images.example/500.jpg',
-                large: 'https://images.example/large.jpg',
+                '250':
+                  'https://coverartarchive.org/release/release-album/250.jpg',
+                '500':
+                  'http://coverartarchive.org/release/release-album/500.jpg',
+                large:
+                  'https://coverartarchive.org/release/release-album/large.jpg',
               },
             },
           ],
@@ -112,8 +115,9 @@ describe('MusicBrainzService', () => {
         musicbrainzArtistId: 'artist-1',
         primaryType: 'Album',
         secondaryTypes: ['Compilation'],
-        coverArtUrl: 'https://images.example/500.jpg',
-        coverUrl: 'https://images.example/500.jpg',
+        coverArtUrl:
+          'https://coverartarchive.org/release/release-album/500.jpg',
+        coverUrl: 'https://coverartarchive.org/release/release-album/500.jpg',
         coverArtSource: 'cover_art_archive_release',
         coverArtProvider: 'cover_art_archive',
         source: 'musicbrainz',

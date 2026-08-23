@@ -468,14 +468,38 @@ export class MusicBrainzService {
       })
       .find(Boolean);
 
-    return (
+    return this.normalizeCoverArtUrl(
       frontImage?.thumbnails?.['500'] ||
-      frontImage?.thumbnails?.large ||
-      frontImage?.thumbnails?.['250'] ||
-      firstAvailableThumbnail ||
-      firstImage?.image ||
-      null
+        frontImage?.thumbnails?.large ||
+        frontImage?.thumbnails?.['250'] ||
+        firstAvailableThumbnail ||
+        firstImage?.image ||
+        null,
     );
+  }
+
+  private normalizeCoverArtUrl(value: unknown): string | null {
+    if (typeof value !== 'string' || !value.trim()) {
+      return null;
+    }
+
+    const normalizedValue = value.trim();
+
+    try {
+      const url = new URL(normalizedValue);
+
+      if (
+        url.protocol === 'http:' &&
+        url.hostname.toLowerCase().endsWith('coverartarchive.org')
+      ) {
+        url.protocol = 'https:';
+        return url.toString();
+      }
+
+      return normalizedValue;
+    } catch (error) {
+      return normalizedValue;
+    }
   }
 
   private async fetchReleaseGroupReleases(releaseGroupMbid: string) {
