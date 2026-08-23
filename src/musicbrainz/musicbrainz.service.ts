@@ -98,6 +98,52 @@ type AlbumPersonnelResponse = {
   personnel: AlbumPersonnelPerson[];
 };
 
+type AlbumTrack = {
+  position: string;
+  number: string | null;
+  discNumber: number | null;
+  title: string;
+  lengthMs: number | null;
+  recordingMbid: string | null;
+  artistName: string;
+};
+
+type AlbumTracksResponse = {
+  releaseGroupMbid: string;
+  releaseMbid: string | null;
+  title?: string;
+  artistName?: string;
+  source: 'musicbrainz';
+  tracks: AlbumTrack[];
+};
+
+type OtherAlbum = {
+  id: string;
+  musicbrainzReleaseGroupId: string;
+  title: string;
+  name: string;
+  artistName: string;
+  artists: Array<{ id: string | null; name: string }>;
+  firstReleaseDate: string | null;
+  release_date: string | null;
+  releaseYear: number | null;
+  primaryType: string | null;
+  secondaryTypes: string[];
+  coverArtUrl: string | null;
+  coverUrl: string | null;
+  images: Array<{ url: string }>;
+  source: 'musicbrainz';
+  sourceProvider: 'musicbrainz';
+};
+
+type OtherAlbumsResponse = {
+  releaseGroupMbid: string;
+  artistMbid: string | null;
+  artistName: string | null;
+  source: 'musicbrainz';
+  albums: OtherAlbum[];
+};
+
 type MutablePersonnelPerson = {
   name: string;
   musicbrainzArtistId: string | null;
@@ -764,9 +810,33 @@ export class MusicBrainzService {
     };
   }
 
-  private async browseReleaseGroupReleasesForPersonnel(
+  private createEmptyTracksResponse(
     releaseGroupMbid: string,
-  ) {
+    releaseMbid: string | null = null,
+  ): AlbumTracksResponse {
+    return {
+      releaseGroupMbid,
+      releaseMbid,
+      source: 'musicbrainz',
+      tracks: [],
+    };
+  }
+
+  private createEmptyOtherAlbumsResponse(
+    releaseGroupMbid: string,
+    artistMbid: string | null = null,
+    artistName: string | null = null,
+  ): OtherAlbumsResponse {
+    return {
+      releaseGroupMbid,
+      artistMbid,
+      artistName,
+      source: 'musicbrainz',
+      albums: [],
+    };
+  }
+
+  private async browseReleaseGroupReleases(releaseGroupMbid: string) {
     const url = this.buildMusicBrainzUrl('/release', {
       'release-group': releaseGroupMbid,
       fmt: 'json',
@@ -779,6 +849,48 @@ export class MusicBrainzService {
     );
 
     return Array.isArray(response?.releases) ? response.releases : [];
+  }
+
+  private async fetchReleaseWithTracks(releaseMbid: string) {
+    const url = this.buildMusicBrainzUrl(
+      `/release/${encodeURIComponent(releaseMbid)}`,
+      {
+        fmt: 'json',
+        inc: 'artist-credits+labels+media+recordings',
+      },
+    );
+
+    return this.fetchJson<any>(url, this.personnelRequestTimeoutMs);
+  }
+
+  private async fetchReleaseGroupDetails(releaseGroupMbid: string) {
+    const url = this.buildMusicBrainzUrl(
+      `/release-group/${encodeURIComponent(releaseGroupMbid)}`,
+      {
+        fmt: 'json',
+        inc: 'artist-credits+releases',
+      },
+    );
+
+    return this.fetchJson<any>(url, this.personnelRequestTimeoutMs);
+  }
+
+  private async fetchArtistAlbumReleaseGroups(artistMbid: string) {
+    const url = this.buildMusicBrainzUrl('/release-group', {
+      artist: artistMbid,
+      type: 'album',
+      fmt: 'json',
+      limit: 50,
+      inc: 'artist-credits',
+    });
+    const response = await this.fetchJson<{ 'release-groups'?: any[] }>(
+      url,
+      this.personnelRequestTimeoutMs,
+    );
+
+    return Array.isArray(response?.['release-groups'])
+      ? response['release-groups']
+      : [];
   }
 
   private getReleaseMediaFormats(release: any) {
@@ -991,6 +1103,127 @@ export class MusicBrainzService {
       typeof medium?.position === 'number' ? `${medium.position}.` : '';
 
     return `${mediumPosition}${fallbackIndex + 1}`;
+  }
+
+  private getArtistCreditName(artistCredit: any, fallback = 'Unknown Artist') {
+    if (!Array.isArray(artistCredit) || artistCredit.length === 0) {
+      return fallback;
+    }
+
+    const names = artistCredit
+      .map((credit) => credit?.name || credit?.artist?.name)
+      .filter((name) => typeof name === 'string' && name.trim());
+
+    return names.length > 0 ? names.join(', ') : fallback;
+  }
+
+  private getPrimaryArtistFromCredits(artistCredit: any) {
+    const firstCredit = Array.isArray(artistCredit)
+      ? artistCredit.find((credit) => credit?.artist)
+      : null;
+    const artist = firstCredit?.artist || null;
+    const name = firstCredit?.name || artist?.name || null;
+
+    return {
+      id: typeof artist?.id === 'string' ? artist.id : null,
+      name: typeof name === 'string' && name.trim() ? name.trim() : null,
+    };
+  }
+
+  private normalizeReleaseTracks(release: any): AlbumTrack[] {
+    const albumArtistName = this.getArtistCreditName(
+      release?.['artist-credit'],
+    );
+    const media = Array.isArray(release?.media) ? release.media : [];
+
+    return media.flatMap((medium) => {
+      const tracks = Array.isArray(medium?.tracks) ? medium.tracks : [];
+      const discNumber =
+        typeof medium?.position === 'number' ? medium.position : null;
+
+      return tracks.map((track, trackIndex) => {
+        const recording = track?.recording || {};
+        const title =
+          typeof track?.title === 'string' && track.title.trim()
+            ? track.title.trim()
+            : typeof recording?.title === 'string' && recording.title.trim()
+              ? recording.title.trim()
+              : `Track ${trackIndex + 1}`;
+        const position = this.getTrackPosition(track, medium, trackIndex);
+        const trackArtistName = this.getArtistCreditName(
+          track?.['artist-credit'] || recording?.['artist-credit'],
+          albumArtistName,
+        );
+
+        return {
+          position,
+          number:
+            typeof track?.number === 'string' && track.number.trim()
+              ? track.number.trim()
+              : position,
+          discNumber,
+          title,
+          lengthMs:
+            typeof track?.length === 'number'
+              ? track.length
+              : typeof recording?.length === 'number'
+                ? recording.length
+                : null,
+          recordingMbid:
+            typeof recording?.id === 'string' ? recording.id : null,
+          artistName: trackArtistName,
+        };
+      });
+    });
+  }
+
+  private normalizeOtherAlbumReleaseGroup(
+    releaseGroup: any,
+    fallbackArtist: { id: string | null; name: string | null },
+  ): OtherAlbum | null {
+    if (!this.isAlbumReleaseGroup(releaseGroup) || !releaseGroup?.id) {
+      return null;
+    }
+
+    const artist = this.getReleaseGroupArtist(releaseGroup);
+    const artistName = artist.name || fallbackArtist.name || 'Unknown Artist';
+    const firstReleaseDate =
+      typeof releaseGroup?.['first-release-date'] === 'string' &&
+      releaseGroup['first-release-date'].trim()
+        ? releaseGroup['first-release-date']
+        : null;
+    const releaseYear =
+      firstReleaseDate && firstReleaseDate.length >= 4
+        ? Number.parseInt(firstReleaseDate.slice(0, 4), 10)
+        : null;
+    const secondaryTypes = Array.isArray(releaseGroup?.['secondary-types'])
+      ? releaseGroup['secondary-types'].filter(
+          (secondaryType) => typeof secondaryType === 'string',
+        )
+      : [];
+    const title = releaseGroup?.title || 'Untitled Album';
+
+    return {
+      id: releaseGroup.id,
+      musicbrainzReleaseGroupId: releaseGroup.id,
+      title,
+      name: title,
+      artistName,
+      artists: [{ id: artist.id || fallbackArtist.id, name: artistName }],
+      firstReleaseDate,
+      release_date: firstReleaseDate,
+      releaseYear: Number.isFinite(releaseYear) ? releaseYear : null,
+      primaryType:
+        typeof releaseGroup?.['primary-type'] === 'string'
+          ? releaseGroup['primary-type']
+          : null,
+      secondaryTypes,
+      coverArtUrl: null,
+      coverUrl: null,
+      images: [],
+      source: 'musicbrainz',
+      sourceProvider: 'musicbrainz',
+    };
   }
 
   private addRelationListCredits(
@@ -1245,6 +1478,178 @@ export class MusicBrainzService {
     );
   }
 
+  async getAlbumTracks(releaseGroupMbid: string): Promise<AlbumTracksResponse> {
+    const normalizedReleaseGroupMbid = releaseGroupMbid?.trim();
+    if (!normalizedReleaseGroupMbid) {
+      throw new BadRequestException('releaseGroupMbid is required');
+    }
+
+    const startedAt = Date.now();
+    let selectedReleaseMbid: string | null = null;
+
+    try {
+      const releases = await this.browseReleaseGroupReleases(
+        normalizedReleaseGroupMbid,
+      );
+      const selectedRelease = this.selectRepresentativeRelease(releases);
+      selectedReleaseMbid =
+        typeof selectedRelease?.id === 'string' ? selectedRelease.id : null;
+
+      if (!selectedReleaseMbid) {
+        const response = this.createEmptyTracksResponse(
+          normalizedReleaseGroupMbid,
+        );
+        this.logger.log(
+          JSON.stringify({
+            provider: 'musicbrainz',
+            feature: 'album_tracks',
+            releaseGroupMbid: normalizedReleaseGroupMbid,
+            releaseMbid: null,
+            durationMs: Date.now() - startedAt,
+            trackCount: 0,
+          }),
+        );
+        return response;
+      }
+
+      const release = await this.fetchReleaseWithTracks(selectedReleaseMbid);
+      const tracks = this.normalizeReleaseTracks(release);
+      const artistName = this.getArtistCreditName(release?.['artist-credit']);
+
+      this.logger.log(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'album_tracks',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          releaseMbid: selectedReleaseMbid,
+          durationMs: Date.now() - startedAt,
+          trackCount: tracks.length,
+        }),
+      );
+
+      return {
+        releaseGroupMbid: normalizedReleaseGroupMbid,
+        releaseMbid: selectedReleaseMbid,
+        title: typeof release?.title === 'string' ? release.title : undefined,
+        artistName,
+        source: 'musicbrainz',
+        tracks,
+      };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'album_tracks',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          releaseMbid: selectedReleaseMbid,
+          durationMs: Date.now() - startedAt,
+          error: (error as Error)?.message || 'MusicBrainz track lookup failed',
+        }),
+      );
+
+      return this.createEmptyTracksResponse(
+        normalizedReleaseGroupMbid,
+        selectedReleaseMbid,
+      );
+    }
+  }
+
+  async getOtherAlbums(releaseGroupMbid: string): Promise<OtherAlbumsResponse> {
+    const normalizedReleaseGroupMbid = releaseGroupMbid?.trim();
+    if (!normalizedReleaseGroupMbid) {
+      throw new BadRequestException('releaseGroupMbid is required');
+    }
+
+    const startedAt = Date.now();
+    let artistMbid: string | null = null;
+    let artistName: string | null = null;
+
+    try {
+      const releaseGroup = await this.fetchReleaseGroupDetails(
+        normalizedReleaseGroupMbid,
+      );
+      const artist = this.getPrimaryArtistFromCredits(
+        releaseGroup?.['artist-credit'],
+      );
+      artistMbid = artist.id;
+      artistName = artist.name;
+
+      if (!artistMbid) {
+        const response = this.createEmptyOtherAlbumsResponse(
+          normalizedReleaseGroupMbid,
+          artistMbid,
+          artistName,
+        );
+        this.logger.log(
+          JSON.stringify({
+            provider: 'musicbrainz',
+            feature: 'other_albums',
+            releaseGroupMbid: normalizedReleaseGroupMbid,
+            artistMbid,
+            durationMs: Date.now() - startedAt,
+            albumCount: 0,
+          }),
+        );
+        return response;
+      }
+
+      const releaseGroups =
+        await this.fetchArtistAlbumReleaseGroups(artistMbid);
+      const albums = releaseGroups
+        .filter((candidate) => candidate?.id !== normalizedReleaseGroupMbid)
+        .map((candidate) =>
+          this.normalizeOtherAlbumReleaseGroup(candidate, {
+            id: artistMbid,
+            name: artistName,
+          }),
+        )
+        .filter((album): album is OtherAlbum => album !== null)
+        .sort((left, right) =>
+          (right.firstReleaseDate || '').localeCompare(
+            left.firstReleaseDate || '',
+          ),
+        );
+
+      this.logger.log(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'other_albums',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          artistMbid,
+          durationMs: Date.now() - startedAt,
+          albumCount: albums.length,
+        }),
+      );
+
+      return {
+        releaseGroupMbid: normalizedReleaseGroupMbid,
+        artistMbid,
+        artistName,
+        source: 'musicbrainz',
+        albums,
+      };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'other_albums',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          artistMbid,
+          durationMs: Date.now() - startedAt,
+          error:
+            (error as Error)?.message ||
+            'MusicBrainz other albums lookup failed',
+        }),
+      );
+
+      return this.createEmptyOtherAlbumsResponse(
+        normalizedReleaseGroupMbid,
+        artistMbid,
+        artistName,
+      );
+    }
+  }
+
   async getAlbumPersonnel(
     releaseGroupMbid: string,
   ): Promise<AlbumPersonnelResponse> {
@@ -1257,7 +1662,7 @@ export class MusicBrainzService {
     let selectedReleaseMbid: string | null = null;
 
     try {
-      const releases = await this.browseReleaseGroupReleasesForPersonnel(
+      const releases = await this.browseReleaseGroupReleases(
         normalizedReleaseGroupMbid,
       );
       const selectedRelease = this.selectRepresentativeRelease(releases);

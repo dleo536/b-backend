@@ -574,6 +574,197 @@ describe('MusicBrainzService', () => {
     });
   });
 
+  it('selects a representative release and normalizes multi-disc tracks', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          releases: [
+            {
+              id: 'release-no-tracks',
+              status: 'Official',
+              date: '1998-01-01',
+              media: [],
+            },
+            {
+              id: 'release-tracks',
+              status: 'Official',
+              country: 'US',
+              date: '1999-01-01',
+              media: [
+                {
+                  format: 'CD',
+                  position: 1,
+                  tracks: [{ recording: { id: 'recording-1' } }],
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'release-tracks',
+          title: 'Track Album',
+          'artist-credit': [{ name: 'Album Artist' }],
+          media: [
+            {
+              position: 1,
+              tracks: [
+                {
+                  number: '1',
+                  title: 'Disc One Song',
+                  length: 245000,
+                  recording: { id: 'recording-1' },
+                },
+              ],
+            },
+            {
+              position: 2,
+              tracks: [
+                {
+                  number: '1',
+                  title: 'Disc Two Song',
+                  recording: {
+                    id: 'recording-2',
+                    length: 180000,
+                    'artist-credit': [{ name: 'Track Artist' }],
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.getAlbumTracks('rg-tracks');
+    const browseUrl = new URL(mockFetch.mock.calls[0][0].toString());
+    const releaseUrl = new URL(mockFetch.mock.calls[1][0].toString());
+
+    expect(browseUrl.pathname).toBe('/ws/2/release');
+    expect(browseUrl.searchParams.get('release-group')).toBe('rg-tracks');
+    expect(releaseUrl.pathname).toBe('/ws/2/release/release-tracks');
+    expect(result).toEqual({
+      releaseGroupMbid: 'rg-tracks',
+      releaseMbid: 'release-tracks',
+      title: 'Track Album',
+      artistName: 'Album Artist',
+      source: 'musicbrainz',
+      tracks: [
+        {
+          position: '1',
+          number: '1',
+          discNumber: 1,
+          title: 'Disc One Song',
+          lengthMs: 245000,
+          recordingMbid: 'recording-1',
+          artistName: 'Album Artist',
+        },
+        {
+          position: '1',
+          number: '1',
+          discNumber: 2,
+          title: 'Disc Two Song',
+          lengthMs: 180000,
+          recordingMbid: 'recording-2',
+          artistName: 'Track Artist',
+        },
+      ],
+    });
+  });
+
+  it('returns safe empty tracks when MusicBrainz has no usable release', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ releases: [] }), { status: 200 }),
+    );
+
+    const result = await service.getAlbumTracks('rg-empty-tracks');
+
+    expect(result).toEqual({
+      releaseGroupMbid: 'rg-empty-tracks',
+      releaseMbid: null,
+      source: 'musicbrainz',
+      tracks: [],
+    });
+  });
+
+  it('fetches other albums by primary artist and excludes the current release group', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'rg-current',
+          title: 'Current Album',
+          'artist-credit': [
+            { artist: { id: 'artist-1', name: 'Album Artist' } },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          'release-groups': [
+            {
+              id: 'rg-current',
+              title: 'Current Album',
+              'primary-type': 'Album',
+              'first-release-date': '2001-01-01',
+            },
+            {
+              id: 'rg-newer',
+              title: 'Newer Album',
+              'primary-type': 'Album',
+              'first-release-date': '2003-05-01',
+              'artist-credit': [
+                { artist: { id: 'artist-1', name: 'Album Artist' } },
+              ],
+            },
+            {
+              id: 'rg-older',
+              title: 'Older Album',
+              'primary-type': 'Album',
+              'first-release-date': '1999-02-01',
+              'artist-credit': [
+                { artist: { id: 'artist-1', name: 'Album Artist' } },
+              ],
+            },
+            {
+              id: 'rg-ep',
+              title: 'EP',
+              'primary-type': 'EP',
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.getOtherAlbums('rg-current');
+    const detailsUrl = new URL(mockFetch.mock.calls[0][0].toString());
+    const albumsUrl = new URL(mockFetch.mock.calls[1][0].toString());
+
+    expect(detailsUrl.pathname).toBe('/ws/2/release-group/rg-current');
+    expect(albumsUrl.pathname).toBe('/ws/2/release-group');
+    expect(albumsUrl.searchParams.get('artist')).toBe('artist-1');
+    expect(albumsUrl.searchParams.get('type')).toBe('album');
+    expect(
+      result.albums.map((album) => album.musicbrainzReleaseGroupId),
+    ).toEqual(['rg-newer', 'rg-older']);
+    expect(result).toEqual(
+      expect.objectContaining({
+        releaseGroupMbid: 'rg-current',
+        artistMbid: 'artist-1',
+        artistName: 'Album Artist',
+        source: 'musicbrainz',
+      }),
+    );
+  });
+
   it('searches and normalizes artists', async () => {
     mockFetch.mockResolvedValueOnce(
       new Response(
