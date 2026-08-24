@@ -18,6 +18,11 @@ export class AlbumController {
     return this.musicBrainzService.getOtherAlbums(releaseGroupMbid);
   }
 
+  @Get(':releaseGroupMbid/artist-image')
+  getAlbumArtistImage(@Param('releaseGroupMbid') releaseGroupMbid: string) {
+    return this.musicBrainzService.getAlbumArtistImage(releaseGroupMbid);
+  }
+
   @Get(':releaseGroupMbid/personnel')
   getAlbumPersonnel(@Param('releaseGroupMbid') releaseGroupMbid: string) {
     return this.musicBrainzService.getAlbumPersonnel(releaseGroupMbid);

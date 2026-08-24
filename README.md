@@ -56,6 +56,8 @@ npm run typeorm:cli -- migration:run -d src/data-source.ts
 MUSIC_SEARCH_PROVIDER=musicbrainz
 MUSICBRAINZ_BASE_URL=https://musicbrainz-sample.bsides.pro/ws/2
 COVER_ART_ARCHIVE_BASE_URL=https://coverartarchive.org
+FANART_API_KEY=<fanart-api-key>
+FANART_BASE_URL=https://webservice.fanart.tv/v3/music
 ```
 
 Set `MUSIC_SEARCH_PROVIDER=spotify` to route the shared search endpoints back

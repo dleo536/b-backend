@@ -743,18 +743,83 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          releases: [
+            { id: 'release-newer', status: 'Official', date: '2003-05-01' },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          releases: [
+            { id: 'release-older', status: 'Official', date: '1999-02-01' },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          images: [
+            {
+              front: true,
+              thumbnails: { '500': 'https://images.example/newer-500.jpg' },
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ images: [] }), { status: 404 }),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ images: [] }), { status: 404 }),
+    );
 
     const result = await service.getOtherAlbums('rg-current');
     const detailsUrl = new URL(mockFetch.mock.calls[0][0].toString());
     const albumsUrl = new URL(mockFetch.mock.calls[1][0].toString());
+    const newerReleasesUrl = new URL(mockFetch.mock.calls[2][0].toString());
+    const olderReleasesUrl = new URL(mockFetch.mock.calls[3][0].toString());
+    const newerCoverUrl = new URL(mockFetch.mock.calls[4][0].toString());
+    const olderCoverUrl = new URL(mockFetch.mock.calls[5][0].toString());
+    const olderGroupCoverUrl = new URL(mockFetch.mock.calls[6][0].toString());
 
     expect(detailsUrl.pathname).toBe('/ws/2/release-group/rg-current');
     expect(albumsUrl.pathname).toBe('/ws/2/release-group');
     expect(albumsUrl.searchParams.get('artist')).toBe('artist-1');
     expect(albumsUrl.searchParams.get('type')).toBe('album');
+    expect(newerReleasesUrl.pathname).toBe('/ws/2/release-group/rg-newer');
+    expect(olderReleasesUrl.pathname).toBe('/ws/2/release-group/rg-older');
+    expect(newerCoverUrl.pathname).toBe('/release/release-newer');
+    expect(olderCoverUrl.pathname).toBe('/release/release-older');
+    expect(olderGroupCoverUrl.pathname).toBe('/release-group/rg-older');
     expect(
       result.albums.map((album) => album.musicbrainzReleaseGroupId),
     ).toEqual(['rg-newer', 'rg-older']);
+    expect(result.albums[0]).toEqual(
+      expect.objectContaining({
+        coverArtUrl: 'https://images.example/newer-500.jpg',
+        coverUrl: 'https://images.example/newer-500.jpg',
+        coverArtSource: 'cover_art_archive_release',
+        coverArtProvider: 'cover_art_archive',
+        images: [{ url: 'https://images.example/newer-500.jpg' }],
+      }),
+    );
+    expect(result.albums[1]).toEqual(
+      expect.objectContaining({
+        coverArtUrl: null,
+        coverUrl: null,
+        images: [],
+      }),
+    );
     expect(result).toEqual(
       expect.objectContaining({
         releaseGroupMbid: 'rg-current',
@@ -763,6 +828,80 @@ describe('MusicBrainzService', () => {
         source: 'musicbrainz',
       }),
     );
+  });
+
+  it('fetches a fanart.tv artist background image for an album release group', async () => {
+    process.env.FANART_API_KEY = 'fanart-secret';
+    process.env.FANART_BASE_URL = 'https://fanart.example/v3/music';
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'rg-current',
+          title: 'Current Album',
+          'artist-credit': [
+            { artist: { id: 'artist-1', name: 'Album Artist' } },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          artistthumb: [{ url: 'https://images.example/thumb.jpg' }],
+          artistbackground: [{ url: 'https://images.example/background.jpg' }],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.getAlbumArtistImage('rg-current');
+    const detailsUrl = new URL(mockFetch.mock.calls[0][0].toString());
+    const fanartUrl = new URL(mockFetch.mock.calls[1][0].toString());
+
+    expect(detailsUrl.pathname).toBe('/ws/2/release-group/rg-current');
+    expect(detailsUrl.searchParams.get('inc')).toBe('artist-credits+releases');
+    expect(fanartUrl.origin).toBe('https://fanart.example');
+    expect(fanartUrl.pathname).toBe('/v3/music/artist-1');
+    expect(fanartUrl.searchParams.get('api_key')).toBe('fanart-secret');
+    expect(result).toEqual({
+      releaseGroupMbid: 'rg-current',
+      artistMbid: 'artist-1',
+      artistName: 'Album Artist',
+      imageUrl: 'https://images.example/background.jpg',
+      source: 'fanart_tv',
+      imageType: 'artistbackground',
+      attributionText: 'Image from fanart.tv',
+    });
+  });
+
+  it('returns a safe empty artist image response when fanart.tv is not configured', async () => {
+    delete process.env.FANART_API_KEY;
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          id: 'rg-current',
+          title: 'Current Album',
+          'artist-credit': [
+            { artist: { id: 'artist-1', name: 'Album Artist' } },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.getAlbumArtistImage('rg-current');
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      releaseGroupMbid: 'rg-current',
+      artistMbid: 'artist-1',
+      artistName: 'Album Artist',
+      imageUrl: null,
+      source: 'fanart_tv',
+      imageType: null,
+      attributionText: null,
+    });
   });
 
   it('searches and normalizes artists', async () => {

@@ -131,6 +131,9 @@ type OtherAlbum = {
   secondaryTypes: string[];
   coverArtUrl: string | null;
   coverUrl: string | null;
+  coverArtSource: CoverArtSource;
+  coverArtProvider: CoverArtProvider | null;
+  coverArtAttribution: string | null;
   images: Array<{ url: string }>;
   source: 'musicbrainz';
   sourceProvider: 'musicbrainz';
@@ -142,6 +145,22 @@ type OtherAlbumsResponse = {
   artistName: string | null;
   source: 'musicbrainz';
   albums: OtherAlbum[];
+};
+
+type ArtistImageType =
+  | 'artistbackground'
+  | 'artistthumb'
+  | 'musicbanner'
+  | 'hdmusiclogo';
+
+type AlbumArtistImageResponse = {
+  releaseGroupMbid: string;
+  artistMbid: string | null;
+  artistName: string | null;
+  imageUrl: string | null;
+  source: 'fanart_tv';
+  imageType: ArtistImageType | null;
+  attributionText: string | null;
 };
 
 type MutablePersonnelPerson = {
@@ -167,12 +186,21 @@ export class MusicBrainzService {
   private readonly maxQueryLength = 120;
   private readonly requestTimeoutMs = 7000;
   private readonly personnelRequestTimeoutMs = 10000;
+  private readonly fanartRequestTimeoutMs = 7000;
   private readonly coverArtTimeoutMs = 2500;
+  private readonly maxOtherAlbumsCoverArtLookups = 24;
+  private readonly otherAlbumsCoverArtConcurrency = 6;
   private readonly cacheTtlMs = 10 * 60 * 1000;
+  private readonly artistImageFoundCacheTtlMs = 30 * 24 * 60 * 60 * 1000;
+  private readonly artistImageMissingCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
   private readonly coverArtCache = new Map<string, CacheEntry<string | null>>();
   private readonly resolvedCoverArtCache = new Map<
     string,
     CacheEntry<ResolvedCoverArt | null>
+  >();
+  private readonly artistImageCache = new Map<
+    string,
+    CacheEntry<AlbumArtistImageResponse>
   >();
   private readonly responseCache = new Map<string, CacheEntry<unknown>>();
 
@@ -191,6 +219,13 @@ export class MusicBrainzService {
     return (
       process.env.COVER_ART_ARCHIVE_BASE_URL?.trim() ||
       this.defaultCoverArtArchiveBaseUrl
+    ).replace(/\/+$/, '');
+  }
+
+  private get fanartBaseUrl() {
+    return (
+      process.env.FANART_BASE_URL?.trim() ||
+      'https://webservice.fanart.tv/v3/music'
     ).replace(/\/+$/, '');
   }
 
@@ -239,6 +274,7 @@ export class MusicBrainzService {
     cache: Map<string, CacheEntry<T>>,
     key: string,
     value: T,
+    ttlMs = this.cacheTtlMs,
   ) {
     if (cache.size >= 250) {
       const oldestKey = cache.keys().next().value;
@@ -249,7 +285,7 @@ export class MusicBrainzService {
 
     cache.set(key, {
       value,
-      expiresAt: Date.now() + this.cacheTtlMs,
+      expiresAt: Date.now() + ttlMs,
     });
   }
 
@@ -287,6 +323,178 @@ export class MusicBrainzService {
     context: Record<string, unknown>,
   ) {
     this.logger[level](JSON.stringify(context));
+  }
+
+  private buildFanartUrl(artistMbid: string) {
+    const apiKey = process.env.FANART_API_KEY?.trim();
+    if (!apiKey) {
+      return null;
+    }
+
+    const url = new URL(
+      `${this.fanartBaseUrl}/${encodeURIComponent(artistMbid)}`,
+    );
+    url.searchParams.set('api_key', apiKey);
+    return url;
+  }
+
+  private selectFanartArtistImage(fanartResponse: any): {
+    imageUrl: string | null;
+    imageType: ArtistImageType | null;
+  } {
+    const preferredTypes: ArtistImageType[] = [
+      'artistbackground',
+      'artistthumb',
+      'musicbanner',
+      'hdmusiclogo',
+    ];
+
+    for (const imageType of preferredTypes) {
+      const images = Array.isArray(fanartResponse?.[imageType])
+        ? fanartResponse[imageType]
+        : [];
+      const imageUrl = images
+        .map((image) => image?.url)
+        .find((url) => typeof url === 'string' && url.trim());
+
+      if (imageUrl) {
+        return {
+          imageUrl: imageUrl.trim(),
+          imageType,
+        };
+      }
+    }
+
+    return {
+      imageUrl: null,
+      imageType: null,
+    };
+  }
+
+  private async fetchFanartArtistImage(
+    artistMbid: string,
+    artistName: string | null,
+  ): Promise<
+    Pick<AlbumArtistImageResponse, 'imageUrl' | 'imageType' | 'attributionText'>
+  > {
+    const url = this.buildFanartUrl(artistMbid);
+    if (!url) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'fanart_tv',
+          configured: false,
+          artistMbid,
+          artistName,
+          error: 'FANART_API_KEY is not configured',
+        }),
+      );
+      return {
+        imageUrl: null,
+        imageType: null,
+        attributionText: null,
+      };
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      this.fanartRequestTimeoutMs,
+    );
+    const startedAt = Date.now();
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+      const durationMs = Date.now() - startedAt;
+
+      if (response.status === 404) {
+        this.logger.log(
+          JSON.stringify({
+            provider: 'fanart_tv',
+            endpoint: `/${artistMbid}`,
+            artistMbid,
+            artistName,
+            durationMs,
+            status: response.status,
+            imageFound: false,
+            imageType: null,
+          }),
+        );
+        return {
+          imageUrl: null,
+          imageType: null,
+          attributionText: null,
+        };
+      }
+
+      if (!response.ok) {
+        this.logger.warn(
+          JSON.stringify({
+            provider: 'fanart_tv',
+            endpoint: `/${artistMbid}`,
+            artistMbid,
+            artistName,
+            durationMs,
+            status: response.status,
+            error: `fanart.tv request failed status=${response.status}`,
+          }),
+        );
+        return {
+          imageUrl: null,
+          imageType: null,
+          attributionText: null,
+        };
+      }
+
+      const data = await response.json();
+      const selectedImage = this.selectFanartArtistImage(data);
+      this.logger.log(
+        JSON.stringify({
+          provider: 'fanart_tv',
+          endpoint: `/${artistMbid}`,
+          artistMbid,
+          artistName,
+          durationMs,
+          status: response.status,
+          imageFound: Boolean(selectedImage.imageUrl),
+          imageType: selectedImage.imageType,
+        }),
+      );
+
+      return {
+        ...selectedImage,
+        attributionText: selectedImage.imageUrl ? 'Image from fanart.tv' : null,
+      };
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      const isTimeout = (error as Error)?.name === 'AbortError';
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'fanart_tv',
+          endpoint: `/${artistMbid}`,
+          artistMbid,
+          artistName,
+          durationMs,
+          timeout: isTimeout,
+          error: isTimeout
+            ? 'fanart.tv request timed out'
+            : (error as Error)?.message || 'fanart.tv request failed',
+        }),
+      );
+
+      return {
+        imageUrl: null,
+        imageType: null,
+        attributionText: null,
+      };
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private createProviderUnavailable(
@@ -798,6 +1006,63 @@ export class MusicBrainzService {
     return appleCoverArt;
   }
 
+  private async resolveReleaseGroupCoverArtOnly(
+    releaseGroupMbid: string,
+  ): Promise<ResolvedCoverArt | null> {
+    const normalizedReleaseGroupMbid = releaseGroupMbid?.trim();
+    if (!normalizedReleaseGroupMbid) {
+      return null;
+    }
+
+    const cacheKey = `release-group-only:${normalizedReleaseGroupMbid}`;
+    const cached = this.getCached(this.resolvedCoverArtCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const releaseGroupCoverUrl = await this.fetchCoverArtArchiveUrl(
+      'release-group',
+      normalizedReleaseGroupMbid,
+    );
+    const resolvedCoverArt: ResolvedCoverArt | null = releaseGroupCoverUrl
+      ? {
+          url: releaseGroupCoverUrl,
+          source: 'cover_art_archive_release_group',
+          provider: 'cover_art_archive',
+          attribution: 'Cover art from Cover Art Archive',
+          musicbrainzReleaseId: null,
+        }
+      : null;
+
+    this.setCached(this.resolvedCoverArtCache, cacheKey, resolvedCoverArt);
+    return resolvedCoverArt;
+  }
+
+  private async mapWithConcurrency<T, R>(
+    items: T[],
+    concurrency: number,
+    mapper: (item: T, index: number) => Promise<R>,
+  ): Promise<R[]> {
+    const results = new Array<R>(items.length);
+    let nextIndex = 0;
+    const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        while (nextIndex < items.length) {
+          const currentIndex = nextIndex;
+          nextIndex += 1;
+          results[currentIndex] = await mapper(
+            items[currentIndex],
+            currentIndex,
+          );
+        }
+      }),
+    );
+
+    return results;
+  }
+
   private createEmptyPersonnelResponse(
     releaseGroupMbid: string,
     releaseMbid: string | null = null,
@@ -833,6 +1098,22 @@ export class MusicBrainzService {
       artistName,
       source: 'musicbrainz',
       albums: [],
+    };
+  }
+
+  private createEmptyArtistImageResponse(
+    releaseGroupMbid: string,
+    artistMbid: string | null = null,
+    artistName: string | null = null,
+  ): AlbumArtistImageResponse {
+    return {
+      releaseGroupMbid,
+      artistMbid,
+      artistName,
+      imageUrl: null,
+      source: 'fanart_tv',
+      imageType: null,
+      attributionText: null,
     };
   }
 
@@ -1180,6 +1461,7 @@ export class MusicBrainzService {
   private normalizeOtherAlbumReleaseGroup(
     releaseGroup: any,
     fallbackArtist: { id: string | null; name: string | null },
+    coverArt: ResolvedCoverArt | null = null,
   ): OtherAlbum | null {
     if (!this.isAlbumReleaseGroup(releaseGroup) || !releaseGroup?.id) {
       return null;
@@ -1202,6 +1484,7 @@ export class MusicBrainzService {
         )
       : [];
     const title = releaseGroup?.title || 'Untitled Album';
+    const coverArtUrl = coverArt?.url || null;
 
     return {
       id: releaseGroup.id,
@@ -1218,9 +1501,12 @@ export class MusicBrainzService {
           ? releaseGroup['primary-type']
           : null,
       secondaryTypes,
-      coverArtUrl: null,
-      coverUrl: null,
-      images: [],
+      coverArtUrl,
+      coverUrl: coverArtUrl,
+      coverArtSource: coverArt?.source || null,
+      coverArtProvider: coverArt?.provider || null,
+      coverArtAttribution: coverArt?.attribution || null,
+      images: coverArtUrl ? [{ url: coverArtUrl }] : [],
       source: 'musicbrainz',
       sourceProvider: 'musicbrainz',
     };
@@ -1595,13 +1881,63 @@ export class MusicBrainzService {
 
       const releaseGroups =
         await this.fetchArtistAlbumReleaseGroups(artistMbid);
-      const albums = releaseGroups
+      const candidateReleaseGroups = releaseGroups
         .filter((candidate) => candidate?.id !== normalizedReleaseGroupMbid)
+        .filter((candidate) => this.isAlbumReleaseGroup(candidate))
+        .sort((left, right) =>
+          (
+            (typeof right?.['first-release-date'] === 'string'
+              ? right['first-release-date']
+              : '') || ''
+          ).localeCompare(
+            (typeof left?.['first-release-date'] === 'string'
+              ? left['first-release-date']
+              : '') || '',
+          ),
+        );
+      const coverArtCandidates = candidateReleaseGroups.slice(
+        0,
+        this.maxOtherAlbumsCoverArtLookups,
+      );
+      const coverArtResults = await this.mapWithConcurrency(
+        coverArtCandidates,
+        this.otherAlbumsCoverArtConcurrency,
+        async (candidate) => {
+          try {
+            return typeof candidate?.id === 'string'
+              ? await this.resolveCoverArt(candidate)
+              : null;
+          } catch (error) {
+            this.logger.warn(
+              JSON.stringify({
+                provider: 'cover_art_archive',
+                feature: 'other_albums_cover_art',
+                releaseGroupMbid: candidate?.id || null,
+                error:
+                  (error as Error)?.message ||
+                  'Other albums cover art lookup failed',
+              }),
+            );
+            return null;
+          }
+        },
+      );
+      const coverArtByReleaseGroupMbid = new Map(
+        coverArtCandidates.map((candidate, index) => [
+          candidate?.id,
+          coverArtResults[index] || null,
+        ]),
+      );
+      const albums = candidateReleaseGroups
         .map((candidate) =>
-          this.normalizeOtherAlbumReleaseGroup(candidate, {
-            id: artistMbid,
-            name: artistName,
-          }),
+          this.normalizeOtherAlbumReleaseGroup(
+            candidate,
+            {
+              id: artistMbid,
+              name: artistName,
+            },
+            coverArtByReleaseGroupMbid.get(candidate?.id) || null,
+          ),
         )
         .filter((album): album is OtherAlbum => album !== null)
         .sort((left, right) =>
@@ -1618,6 +1954,8 @@ export class MusicBrainzService {
           artistMbid,
           durationMs: Date.now() - startedAt,
           albumCount: albums.length,
+          coverArtCount: albums.filter((album) => Boolean(album.coverArtUrl))
+            .length,
         }),
       );
 
@@ -1643,6 +1981,118 @@ export class MusicBrainzService {
       );
 
       return this.createEmptyOtherAlbumsResponse(
+        normalizedReleaseGroupMbid,
+        artistMbid,
+        artistName,
+      );
+    }
+  }
+
+  async getAlbumArtistImage(
+    releaseGroupMbid: string,
+  ): Promise<AlbumArtistImageResponse> {
+    const normalizedReleaseGroupMbid = releaseGroupMbid?.trim();
+    if (!normalizedReleaseGroupMbid) {
+      throw new BadRequestException('releaseGroupMbid is required');
+    }
+
+    const startedAt = Date.now();
+    let artistMbid: string | null = null;
+    let artistName: string | null = null;
+
+    try {
+      const releaseGroup = await this.fetchReleaseGroupDetails(
+        normalizedReleaseGroupMbid,
+      );
+      const artist = this.getPrimaryArtistFromCredits(
+        releaseGroup?.['artist-credit'],
+      );
+      artistMbid = artist.id;
+      artistName = artist.name;
+
+      if (!artistMbid) {
+        const response = this.createEmptyArtistImageResponse(
+          normalizedReleaseGroupMbid,
+          artistMbid,
+          artistName,
+        );
+        this.logger.log(
+          JSON.stringify({
+            provider: 'fanart_tv',
+            feature: 'album_artist_image',
+            releaseGroupMbid: normalizedReleaseGroupMbid,
+            artistMbid,
+            artistName,
+            imageFound: false,
+            imageType: null,
+            durationMs: Date.now() - startedAt,
+          }),
+        );
+        return response;
+      }
+
+      const cacheKey = `artist-image:${artistMbid}`;
+      const cached = this.getCached(this.artistImageCache, cacheKey);
+      if (cached !== undefined) {
+        return {
+          ...cached,
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          artistMbid,
+          artistName: artistName || cached.artistName,
+        };
+      }
+
+      const fanartImage = await this.fetchFanartArtistImage(
+        artistMbid,
+        artistName,
+      );
+      const response: AlbumArtistImageResponse = {
+        releaseGroupMbid: normalizedReleaseGroupMbid,
+        artistMbid,
+        artistName,
+        imageUrl: fanartImage.imageUrl,
+        source: 'fanart_tv',
+        imageType: fanartImage.imageType,
+        attributionText: fanartImage.attributionText,
+      };
+
+      this.setCached(
+        this.artistImageCache,
+        cacheKey,
+        response,
+        response.imageUrl
+          ? this.artistImageFoundCacheTtlMs
+          : this.artistImageMissingCacheTtlMs,
+      );
+      this.logger.log(
+        JSON.stringify({
+          provider: 'fanart_tv',
+          feature: 'album_artist_image',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          artistMbid,
+          artistName,
+          imageFound: Boolean(response.imageUrl),
+          imageType: response.imageType,
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+
+      return response;
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'fanart_tv',
+          feature: 'album_artist_image',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          artistMbid,
+          artistName,
+          durationMs: Date.now() - startedAt,
+          error:
+            (error as Error)?.message || 'Album artist image lookup failed',
+        }),
+      );
+
+      return this.createEmptyArtistImageResponse(
         normalizedReleaseGroupMbid,
         artistMbid,
         artistName,
