@@ -60,11 +60,12 @@ export type MusicBrainzUnavailableSearchResult = {
   error: string;
 };
 
-type CoverArtProvider = 'cover_art_archive' | 'apple_music';
+type CoverArtProvider = 'cover_art_archive' | 'fanart_tv' | 'apple_music';
 
 type CoverArtSource =
   | 'cover_art_archive_release'
   | 'cover_art_archive_release_group'
+  | 'fanart_tv'
   | 'apple_music'
   | null;
 
@@ -75,6 +76,7 @@ type ResolvedCoverArt = {
   attribution: string | null;
   musicbrainzReleaseId?: string | null;
   appleMusicAlbumId?: string | null;
+  fanartReleaseGroupMbid?: string | null;
 };
 
 type AlbumPersonnelTrackCredit = {
@@ -338,6 +340,19 @@ export class MusicBrainzService {
     return url;
   }
 
+  private buildFanartAlbumUrl(releaseGroupMbid: string) {
+    const apiKey = process.env.FANART_API_KEY?.trim();
+    if (!apiKey) {
+      return null;
+    }
+
+    const url = new URL(
+      `${this.fanartBaseUrl}/albums/${encodeURIComponent(releaseGroupMbid)}`,
+    );
+    url.searchParams.set('api_key', apiKey);
+    return url;
+  }
+
   private selectFanartArtistImage(fanartResponse: any): {
     imageUrl: string | null;
     imageType: ArtistImageType | null;
@@ -369,6 +384,132 @@ export class MusicBrainzService {
       imageUrl: null,
       imageType: null,
     };
+  }
+
+  private selectFanartAlbumCover(fanartResponse: any): string | null {
+    const albumCovers = Array.isArray(fanartResponse?.albumcover)
+      ? fanartResponse.albumcover
+      : [];
+    const albumCoverUrl = albumCovers
+      .map((image) => image?.url)
+      .find((url) => typeof url === 'string' && url.trim());
+
+    return this.normalizeCoverArtUrl(albumCoverUrl || null);
+  }
+
+  private async fetchFanartAlbumCover(
+    releaseGroupMbid: string,
+  ): Promise<ResolvedCoverArt | null> {
+    const url = this.buildFanartAlbumUrl(releaseGroupMbid);
+    if (!url) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'fanart_tv',
+          fallbackFor: 'cover_art',
+          releaseGroupMbid,
+          configured: false,
+          error: 'FANART_API_KEY is not configured',
+        }),
+      );
+      return null;
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      this.fanartRequestTimeoutMs,
+    );
+    const startedAt = Date.now();
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+        },
+        signal: controller.signal,
+      });
+      const durationMs = Date.now() - startedAt;
+
+      if (response.status === 404) {
+        this.logger.log(
+          JSON.stringify({
+            provider: 'fanart_tv',
+            fallbackFor: 'cover_art',
+            endpoint: `/albums/${releaseGroupMbid}`,
+            releaseGroupMbid,
+            durationMs,
+            status: response.status,
+            imageFound: false,
+            imageType: null,
+          }),
+        );
+        return null;
+      }
+
+      if (!response.ok) {
+        this.logger.warn(
+          JSON.stringify({
+            provider: 'fanart_tv',
+            fallbackFor: 'cover_art',
+            endpoint: `/albums/${releaseGroupMbid}`,
+            releaseGroupMbid,
+            durationMs,
+            status: response.status,
+            error: `fanart.tv album cover request failed status=${response.status}`,
+          }),
+        );
+        return null;
+      }
+
+      const data = await response.json();
+      const albumCoverUrl = this.selectFanartAlbumCover(data);
+      this.logger.log(
+        JSON.stringify({
+          provider: 'fanart_tv',
+          fallbackFor: 'cover_art',
+          endpoint: `/albums/${releaseGroupMbid}`,
+          releaseGroupMbid,
+          durationMs,
+          status: response.status,
+          imageFound: Boolean(albumCoverUrl),
+          imageType: albumCoverUrl ? 'albumcover' : null,
+        }),
+      );
+
+      if (!albumCoverUrl) {
+        return null;
+      }
+
+      return {
+        url: albumCoverUrl,
+        source: 'fanart_tv',
+        provider: 'fanart_tv',
+        attribution: 'Artwork from fanart.tv',
+        musicbrainzReleaseId: null,
+        fanartReleaseGroupMbid: releaseGroupMbid,
+      };
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      const isTimeout = (error as Error)?.name === 'AbortError';
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'fanart_tv',
+          fallbackFor: 'cover_art',
+          endpoint: `/albums/${releaseGroupMbid}`,
+          releaseGroupMbid,
+          durationMs,
+          timeout: isTimeout,
+          error: isTimeout
+            ? 'fanart.tv album cover request timed out'
+            : (error as Error)?.message ||
+              'fanart.tv album cover request failed',
+        }),
+      );
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   private async fetchFanartArtistImage(
@@ -952,9 +1093,24 @@ export class MusicBrainzService {
       return cached;
     }
 
+    const releaseGroupCoverUrl = await this.fetchCoverArtArchiveUrl(
+      'release-group',
+      releaseGroupMbid,
+    );
+    if (releaseGroupCoverUrl) {
+      const resolvedCoverArt: ResolvedCoverArt = {
+        url: releaseGroupCoverUrl,
+        source: 'cover_art_archive_release_group',
+        provider: 'cover_art_archive',
+        attribution: 'Cover art from Cover Art Archive',
+        musicbrainzReleaseId: null,
+      };
+      this.setCached(this.resolvedCoverArtCache, cacheKey, resolvedCoverArt);
+      return resolvedCoverArt;
+    }
+
     const releases = await this.fetchReleaseGroupReleases(releaseGroupMbid);
     const candidateReleases = this.sortCandidateReleases(releases).slice(0, 6);
-
     for (const release of candidateReleases) {
       const releaseCoverUrl = await this.fetchCoverArtArchiveUrl(
         'release',
@@ -974,20 +1130,10 @@ export class MusicBrainzService {
       }
     }
 
-    const releaseGroupCoverUrl = await this.fetchCoverArtArchiveUrl(
-      'release-group',
-      releaseGroupMbid,
-    );
-    if (releaseGroupCoverUrl) {
-      const resolvedCoverArt: ResolvedCoverArt = {
-        url: releaseGroupCoverUrl,
-        source: 'cover_art_archive_release_group',
-        provider: 'cover_art_archive',
-        attribution: 'Cover art from Cover Art Archive',
-        musicbrainzReleaseId: null,
-      };
-      this.setCached(this.resolvedCoverArtCache, cacheKey, resolvedCoverArt);
-      return resolvedCoverArt;
+    const fanartCoverArt = await this.fetchFanartAlbumCover(releaseGroupMbid);
+    if (fanartCoverArt) {
+      this.setCached(this.resolvedCoverArtCache, cacheKey, fanartCoverArt);
+      return fanartCoverArt;
     }
 
     const artist = this.getReleaseGroupArtist(releaseGroup);

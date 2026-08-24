@@ -56,6 +56,7 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
     mockFetch.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -90,8 +91,9 @@ describe('MusicBrainzService', () => {
 
     const result = await service.searchAlbums('The', 20);
     const searchUrl = new URL(mockFetch.mock.calls[0][0].toString());
-    const releasesUrl = new URL(mockFetch.mock.calls[1][0].toString());
-    const coverArtUrl = new URL(mockFetch.mock.calls[2][0].toString());
+    const releaseGroupCoverUrl = new URL(mockFetch.mock.calls[1][0].toString());
+    const releasesUrl = new URL(mockFetch.mock.calls[2][0].toString());
+    const coverArtUrl = new URL(mockFetch.mock.calls[3][0].toString());
 
     expect(searchUrl.origin).toBe('https://musicbrainz-full.bsides.pro');
     expect(searchUrl.pathname).toBe('/ws/2/release-group');
@@ -100,6 +102,7 @@ describe('MusicBrainzService', () => {
     );
     expect(searchUrl.searchParams.get('fmt')).toBe('json');
     expect(searchUrl.searchParams.get('limit')).toBe('20');
+    expect(releaseGroupCoverUrl.pathname).toBe('/release-group/rg-album');
     expect(releasesUrl.pathname).toBe('/ws/2/release-group/rg-album');
     expect(releasesUrl.searchParams.get('inc')).toBe('releases');
     expect(coverArtUrl.pathname).toBe('/release/release-album');
@@ -156,10 +159,10 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
     mockFetch.mockResolvedValueOnce(
       new Response(JSON.stringify({ releases: [] }), { status: 200 }),
     );
-    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
 
     const result = await service.searchAlbums('No Cover');
 
@@ -190,7 +193,7 @@ describe('MusicBrainzService', () => {
     expect(searchUrl.searchParams.get('offset')).toBe('10');
   });
 
-  it('falls back from exact release cover art to release-group cover art', async () => {
+  it('prefers release-group cover art before release cover art', async () => {
     mockFetch.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -209,15 +212,6 @@ describe('MusicBrainzService', () => {
     mockFetch.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
-          releases: [{ id: 'release-no-cover', status: 'Official' }],
-        }),
-        { status: 200 },
-      ),
-    );
-    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
-    mockFetch.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
           images: [
             {
               front: true,
@@ -230,17 +224,78 @@ describe('MusicBrainzService', () => {
     );
 
     const result = await service.searchAlbums('Group Cover');
-    const releaseCoverUrl = new URL(mockFetch.mock.calls[2][0].toString());
-    const releaseGroupCoverUrl = new URL(mockFetch.mock.calls[3][0].toString());
+    const releaseGroupCoverUrl = new URL(mockFetch.mock.calls[1][0].toString());
 
-    expect(releaseCoverUrl.pathname).toBe('/release/release-no-cover');
     expect(releaseGroupCoverUrl.pathname).toBe('/release-group/rg-group-cover');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
     expect(result).toEqual([
       expect.objectContaining({
         id: 'rg-group-cover',
         coverArtUrl: 'https://images.example/group-500.jpg',
         coverArtSource: 'cover_art_archive_release_group',
         coverArtProvider: 'cover_art_archive',
+      }),
+    ]);
+  });
+
+  it('falls back to fanart.tv albumcover before Apple Music artwork', async () => {
+    process.env.FANART_API_KEY = 'fanart-secret';
+    process.env.FANART_BASE_URL = 'https://fanart.example/v3/music';
+    const mockAppleMusicService = {
+      searchAlbums: jest.fn(),
+    };
+    service = new MusicBrainzService(mockAppleMusicService as any);
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          'release-groups': [
+            {
+              id: 'rg-fanart-cover',
+              title: 'Fanart Album',
+              'primary-type': 'Album',
+              'artist-credit': [
+                { artist: { id: 'artist-1', name: 'Fanart Artist' } },
+              ],
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ releases: [] }), { status: 200 }),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          albumcover: [{ url: 'https://assets.fanart.tv/fanart-cover.jpg' }],
+          cdart: [{ url: 'https://assets.fanart.tv/disc.png' }],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.searchAlbums('Fanart Album');
+    const releaseGroupCoverUrl = new URL(mockFetch.mock.calls[1][0].toString());
+    const releasesUrl = new URL(mockFetch.mock.calls[2][0].toString());
+    const fanartUrl = new URL(mockFetch.mock.calls[3][0].toString());
+
+    expect(releaseGroupCoverUrl.pathname).toBe(
+      '/release-group/rg-fanart-cover',
+    );
+    expect(releasesUrl.pathname).toBe('/ws/2/release-group/rg-fanart-cover');
+    expect(fanartUrl.origin).toBe('https://fanart.example');
+    expect(fanartUrl.pathname).toBe('/v3/music/albums/rg-fanart-cover');
+    expect(fanartUrl.searchParams.get('api_key')).toBe('fanart-secret');
+    expect(mockAppleMusicService.searchAlbums).not.toHaveBeenCalled();
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'rg-fanart-cover',
+        coverArtUrl: 'https://assets.fanart.tv/fanart-cover.jpg',
+        coverArtSource: 'fanart_tv',
+        coverArtProvider: 'fanart_tv',
+        coverArtAttribution: 'Artwork from fanart.tv',
       }),
     ]);
   });
@@ -278,10 +333,10 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
     mockFetch.mockResolvedValueOnce(
       new Response(JSON.stringify({ releases: [] }), { status: 200 }),
     );
-    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
 
     const result = await service.searchAlbums('Fallback Album');
 
@@ -326,6 +381,8 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
     mockFetch.mockResolvedValueOnce(
       new Response(JSON.stringify({ releases: [] }), { status: 200 }),
     );
@@ -337,7 +394,6 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
-    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
     mockFetch.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -386,6 +442,8 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
+    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
     mockFetch.mockResolvedValueOnce(
       new Response(JSON.stringify({ releases: [] }), { status: 200 }),
     );
@@ -397,7 +455,6 @@ describe('MusicBrainzService', () => {
         { status: 200 },
       ),
     );
-    mockFetch.mockResolvedValueOnce(new Response('', { status: 404 }));
     mockFetch.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -746,26 +803,6 @@ describe('MusicBrainzService', () => {
     mockFetch.mockResolvedValueOnce(
       new Response(
         JSON.stringify({
-          releases: [
-            { id: 'release-newer', status: 'Official', date: '2003-05-01' },
-          ],
-        }),
-        { status: 200 },
-      ),
-    );
-    mockFetch.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          releases: [
-            { id: 'release-older', status: 'Official', date: '1999-02-01' },
-          ],
-        }),
-        { status: 200 },
-      ),
-    );
-    mockFetch.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
           images: [
             {
               front: true,
@@ -780,27 +817,35 @@ describe('MusicBrainzService', () => {
       new Response(JSON.stringify({ images: [] }), { status: 404 }),
     );
     mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          releases: [
+            { id: 'release-older', status: 'Official', date: '1999-02-01' },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
       new Response(JSON.stringify({ images: [] }), { status: 404 }),
     );
 
     const result = await service.getOtherAlbums('rg-current');
     const detailsUrl = new URL(mockFetch.mock.calls[0][0].toString());
     const albumsUrl = new URL(mockFetch.mock.calls[1][0].toString());
-    const newerReleasesUrl = new URL(mockFetch.mock.calls[2][0].toString());
-    const olderReleasesUrl = new URL(mockFetch.mock.calls[3][0].toString());
-    const newerCoverUrl = new URL(mockFetch.mock.calls[4][0].toString());
+    const newerGroupCoverUrl = new URL(mockFetch.mock.calls[2][0].toString());
+    const olderGroupCoverUrl = new URL(mockFetch.mock.calls[3][0].toString());
+    const olderReleasesUrl = new URL(mockFetch.mock.calls[4][0].toString());
     const olderCoverUrl = new URL(mockFetch.mock.calls[5][0].toString());
-    const olderGroupCoverUrl = new URL(mockFetch.mock.calls[6][0].toString());
 
     expect(detailsUrl.pathname).toBe('/ws/2/release-group/rg-current');
     expect(albumsUrl.pathname).toBe('/ws/2/release-group');
     expect(albumsUrl.searchParams.get('artist')).toBe('artist-1');
     expect(albumsUrl.searchParams.get('type')).toBe('album');
-    expect(newerReleasesUrl.pathname).toBe('/ws/2/release-group/rg-newer');
-    expect(olderReleasesUrl.pathname).toBe('/ws/2/release-group/rg-older');
-    expect(newerCoverUrl.pathname).toBe('/release/release-newer');
-    expect(olderCoverUrl.pathname).toBe('/release/release-older');
+    expect(newerGroupCoverUrl.pathname).toBe('/release-group/rg-newer');
     expect(olderGroupCoverUrl.pathname).toBe('/release-group/rg-older');
+    expect(olderReleasesUrl.pathname).toBe('/ws/2/release-group/rg-older');
+    expect(olderCoverUrl.pathname).toBe('/release/release-older');
     expect(
       result.albums.map((album) => album.musicbrainzReleaseGroupId),
     ).toEqual(['rg-newer', 'rg-older']);
@@ -808,7 +853,7 @@ describe('MusicBrainzService', () => {
       expect.objectContaining({
         coverArtUrl: 'https://images.example/newer-500.jpg',
         coverUrl: 'https://images.example/newer-500.jpg',
-        coverArtSource: 'cover_art_archive_release',
+        coverArtSource: 'cover_art_archive_release_group',
         coverArtProvider: 'cover_art_archive',
         images: [{ url: 'https://images.example/newer-500.jpg' }],
       }),
