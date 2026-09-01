@@ -179,6 +179,31 @@ type ArtistSearchImageResult = {
   imageType: ArtistImageType | null;
 };
 
+type ArtistProfileResponse = {
+  id: string;
+  musicbrainzArtistId: string;
+  name: string;
+  sortName: string | null;
+  type: string | null;
+  country: string | null;
+  disambiguation: string | null;
+  lifeSpan: {
+    begin: string | null;
+    end: string | null;
+    ended: boolean | null;
+  };
+  description: string | null;
+  descriptionSource: string | null;
+  imageUrl: string | null;
+  imageSource: 'fanart_tv' | null;
+  imageType: ArtistImageType | null;
+  images: Array<{ url: string }>;
+  genres: string[];
+  catalog: OtherAlbum[];
+  source: 'musicbrainz';
+  sourceProvider: 'musicbrainz';
+};
+
 type MutablePersonnelPerson = {
   name: string;
   musicbrainzArtistId: string | null;
@@ -1362,21 +1387,224 @@ export class MusicBrainzService {
   }
 
   private async fetchArtistAlbumReleaseGroups(artistMbid: string) {
-    const url = this.buildMusicBrainzUrl('/release-group', {
+    const browseUrl = this.buildMusicBrainzUrl('/release-group', {
       artist: artistMbid,
       type: 'album',
       fmt: 'json',
       limit: 50,
       inc: 'artist-credits',
     });
-    const response = await this.fetchJson<{ 'release-groups'?: any[] }>(
-      url,
+    const browseResponse = await this.fetchJson<{ 'release-groups'?: any[] }>(
+      browseUrl,
+      this.personnelRequestTimeoutMs,
+    );
+    const browseReleaseGroups = Array.isArray(
+      browseResponse?.['release-groups'],
+    )
+      ? browseResponse['release-groups']
+      : [];
+
+    if (browseReleaseGroups.length > 0) {
+      return browseReleaseGroups;
+    }
+
+    const searchUrl = this.buildMusicBrainzUrl('/release-group', {
+      query: `arid:${artistMbid} AND primarytype:"album"`,
+      fmt: 'json',
+      limit: 50,
+      inc: 'artist-credits',
+    });
+    const searchResponse = await this.fetchJson<{ 'release-groups'?: any[] }>(
+      searchUrl,
       this.personnelRequestTimeoutMs,
     );
 
-    return Array.isArray(response?.['release-groups'])
-      ? response['release-groups']
+    return Array.isArray(searchResponse?.['release-groups'])
+      ? searchResponse['release-groups']
       : [];
+  }
+
+  private async fetchArtistDetails(artistMbid: string) {
+    const url = this.buildMusicBrainzUrl(
+      `/artist/${encodeURIComponent(artistMbid)}`,
+      {
+        fmt: 'json',
+        inc: 'url-rels+annotation+genres+tags',
+      },
+    );
+
+    return this.fetchJson<any>(url, this.personnelRequestTimeoutMs);
+  }
+
+  private extractWikipediaTitle(resourceUrl: string | null | undefined) {
+    if (typeof resourceUrl !== 'string' || !resourceUrl.includes('/wiki/')) {
+      return null;
+    }
+
+    const title = resourceUrl.split('/wiki/')[1]?.split(/[?#]/)[0];
+    return title ? decodeURIComponent(title) : null;
+  }
+
+  private getWikipediaRelationResource(relations: any) {
+    if (!Array.isArray(relations)) {
+      return null;
+    }
+
+    const relation = relations.find((candidate) => {
+      const relationType =
+        typeof candidate?.type === 'string' ? candidate.type.toLowerCase() : '';
+      const resource =
+        typeof candidate?.url?.resource === 'string'
+          ? candidate.url.resource
+          : '';
+
+      return (
+        relationType === 'wikipedia' || resource.includes('wikipedia.org/wiki/')
+      );
+    });
+
+    return typeof relation?.url?.resource === 'string'
+      ? relation.url.resource
+      : null;
+  }
+
+  private async fetchWikipediaSummary(resourceUrl: string | null) {
+    const title = this.extractWikipediaTitle(resourceUrl);
+    if (!title) {
+      return null;
+    }
+
+    const url = new URL(
+      `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(
+        title,
+      )}`,
+    );
+    const controller = new AbortController();
+    const timeout = setTimeout(
+      () => controller.abort(),
+      this.fanartRequestTimeoutMs,
+    );
+    const startedAt = Date.now();
+
+    try {
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'b.sides/1.0 (support@bsides.pro)',
+        },
+        signal: controller.signal,
+      });
+      const durationMs = Date.now() - startedAt;
+
+      if (!response.ok) {
+        this.logger.warn(
+          JSON.stringify({
+            provider: 'wikipedia',
+            feature: 'artist_profile_description',
+            endpoint: url.pathname,
+            durationMs,
+            status: response.status,
+          }),
+        );
+        return null;
+      }
+
+      const data = await response.json();
+      const extract =
+        typeof data?.extract === 'string' && data.extract.trim()
+          ? data.extract.trim()
+          : null;
+
+      this.logger.log(
+        JSON.stringify({
+          provider: 'wikipedia',
+          feature: 'artist_profile_description',
+          endpoint: url.pathname,
+          durationMs,
+          status: response.status,
+          found: Boolean(extract),
+        }),
+      );
+
+      return extract;
+    } catch (error) {
+      const durationMs = Date.now() - startedAt;
+      const isTimeout = (error as Error)?.name === 'AbortError';
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'wikipedia',
+          feature: 'artist_profile_description',
+          endpoint: url.pathname,
+          durationMs,
+          timeout: isTimeout,
+          error: isTimeout
+            ? 'Wikipedia summary request timed out'
+            : (error as Error)?.message || 'Wikipedia summary request failed',
+        }),
+      );
+      return null;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  private async getArtistDescription(metadata: any) {
+    const wikipediaResource = this.getWikipediaRelationResource(
+      metadata?.relations,
+    );
+    const wikipediaSummary =
+      await this.fetchWikipediaSummary(wikipediaResource);
+    if (wikipediaSummary) {
+      return {
+        description: wikipediaSummary,
+        source: 'MusicBrainz-linked Wikipedia',
+      };
+    }
+
+    const annotation =
+      typeof metadata?.annotation === 'string' && metadata.annotation.trim()
+        ? metadata.annotation.trim()
+        : null;
+    if (annotation) {
+      return {
+        description: annotation,
+        source: 'MusicBrainz annotation',
+      };
+    }
+
+    const disambiguation =
+      typeof metadata?.disambiguation === 'string' &&
+      metadata.disambiguation.trim()
+        ? metadata.disambiguation.trim()
+        : null;
+    if (disambiguation) {
+      return {
+        description: disambiguation,
+        source: 'MusicBrainz artist',
+      };
+    }
+
+    return {
+      description: null,
+      source: null,
+    };
+  }
+
+  private getArtistGenreLabels(metadata: any) {
+    const genres = Array.isArray(metadata?.genres) ? metadata.genres : [];
+    const tags = Array.isArray(metadata?.tags) ? metadata.tags : [];
+
+    return [...genres, ...tags]
+      .sort((left, right) => {
+        const leftCount = typeof left?.count === 'number' ? left.count : 0;
+        const rightCount = typeof right?.count === 'number' ? right.count : 0;
+        return rightCount - leftCount;
+      })
+      .map((genre) => genre?.name)
+      .filter((name): name is string => typeof name === 'string' && !!name)
+      .filter((name, index, all) => all.indexOf(name) === index)
+      .slice(0, 8);
   }
 
   private getReleaseMediaFormats(release: any) {
@@ -2019,6 +2247,171 @@ export class MusicBrainzService {
 
       return normalizedArtists;
     });
+  }
+
+  async getArtistProfile(
+    artistMbid: string,
+    limit = 50,
+  ): Promise<ArtistProfileResponse> {
+    const normalizedArtistMbid = artistMbid?.trim();
+    if (!normalizedArtistMbid) {
+      throw new BadRequestException('artistMbid is required');
+    }
+
+    const normalizedLimit = this.normalizeLimit(limit);
+    const startedAt = Date.now();
+
+    try {
+      const metadata = await this.fetchArtistDetails(normalizedArtistMbid);
+      const artistName =
+        typeof metadata?.name === 'string' && metadata.name.trim()
+          ? metadata.name.trim()
+          : 'Unknown Artist';
+      const [fanartImage, releaseGroups, description] = await Promise.all([
+        this.getFanartArtistSearchImage(normalizedArtistMbid, artistName),
+        this.fetchArtistAlbumReleaseGroups(normalizedArtistMbid),
+        this.getArtistDescription(metadata),
+      ]);
+      const artist = this.normalizeArtist(metadata, fanartImage);
+      const candidateReleaseGroups = releaseGroups
+        .filter((candidate) => this.isAlbumReleaseGroup(candidate))
+        .sort((left, right) =>
+          (
+            (typeof right?.['first-release-date'] === 'string'
+              ? right['first-release-date']
+              : '') || ''
+          ).localeCompare(
+            (typeof left?.['first-release-date'] === 'string'
+              ? left['first-release-date']
+              : '') || '',
+          ),
+        )
+        .slice(0, normalizedLimit);
+      const coverArtCandidates = candidateReleaseGroups.slice(
+        0,
+        this.maxOtherAlbumsCoverArtLookups,
+      );
+      const coverArtResults = await this.mapWithConcurrency(
+        coverArtCandidates,
+        this.otherAlbumsCoverArtConcurrency,
+        async (candidate) => {
+          try {
+            return typeof candidate?.id === 'string'
+              ? await this.resolveCoverArt(candidate)
+              : null;
+          } catch (error) {
+            this.logger.warn(
+              JSON.stringify({
+                provider: 'cover_art_archive',
+                feature: 'artist_profile_catalog_cover_art',
+                artistMbid: normalizedArtistMbid,
+                releaseGroupMbid: candidate?.id || null,
+                error:
+                  (error as Error)?.message ||
+                  'Artist catalog cover art lookup failed',
+              }),
+            );
+            return null;
+          }
+        },
+      );
+      const coverArtByReleaseGroupMbid = new Map(
+        coverArtCandidates.map((candidate, index) => [
+          candidate?.id,
+          coverArtResults[index] || null,
+        ]),
+      );
+      const catalog = candidateReleaseGroups
+        .map((releaseGroup) =>
+          this.normalizeOtherAlbumReleaseGroup(
+            releaseGroup,
+            {
+              id: normalizedArtistMbid,
+              name: artistName,
+            },
+            coverArtByReleaseGroupMbid.get(releaseGroup?.id) || null,
+          ),
+        )
+        .filter((album): album is OtherAlbum => album !== null);
+      const imageUrl = artist?.imageUrl || fanartImage.imageUrl || null;
+      const lifeSpan = artist?.lifeSpan || {
+        begin: null,
+        end: null,
+        ended: null,
+      };
+
+      this.logger.log(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'artist_profile',
+          artistMbid: normalizedArtistMbid,
+          artistName,
+          durationMs: Date.now() - startedAt,
+          albumCount: catalog.length,
+          coverArtCount: catalog.filter((album) => Boolean(album.coverArtUrl))
+            .length,
+          descriptionFound: Boolean(description.description),
+          imageFound: Boolean(imageUrl),
+        }),
+      );
+
+      return {
+        id: normalizedArtistMbid,
+        musicbrainzArtistId: normalizedArtistMbid,
+        name: artist?.name || artistName,
+        sortName: artist?.sortName || null,
+        type: artist?.type || null,
+        country: artist?.country || null,
+        disambiguation: artist?.disambiguation || null,
+        lifeSpan,
+        description: description.description,
+        descriptionSource: description.source,
+        imageUrl,
+        imageSource: imageUrl ? 'fanart_tv' : null,
+        imageType: artist?.imageType || fanartImage.imageType,
+        images: imageUrl ? [{ url: imageUrl }] : [],
+        genres: this.getArtistGenreLabels(metadata),
+        catalog,
+        source: 'musicbrainz',
+        sourceProvider: 'musicbrainz',
+      };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'artist_profile',
+          artistMbid: normalizedArtistMbid,
+          durationMs: Date.now() - startedAt,
+          error:
+            (error as Error)?.message || 'MusicBrainz artist profile failed',
+        }),
+      );
+
+      return {
+        id: normalizedArtistMbid,
+        musicbrainzArtistId: normalizedArtistMbid,
+        name: 'Unknown Artist',
+        sortName: null,
+        type: null,
+        country: null,
+        disambiguation: null,
+        lifeSpan: {
+          begin: null,
+          end: null,
+          ended: null,
+        },
+        description: null,
+        descriptionSource: null,
+        imageUrl: null,
+        imageSource: null,
+        imageType: null,
+        images: [],
+        genres: [],
+        catalog: [],
+        source: 'musicbrainz',
+        sourceProvider: 'musicbrainz',
+      };
+    }
   }
 
   getReleaseGroupCoverArt(releaseGroupMbid: string) {

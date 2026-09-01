@@ -1055,6 +1055,223 @@ describe('MusicBrainzService', () => {
     ]);
   });
 
+  it('fetches an artist profile with MusicBrainz catalog albums and fanart image', async () => {
+    process.env.FANART_API_KEY = 'fanart-key';
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(input.toString());
+
+      if (url.pathname === '/ws/2/artist/artist-prince') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: 'artist-prince',
+              name: 'Prince',
+              'sort-name': 'Prince',
+              type: 'Person',
+              country: 'US',
+              disambiguation: 'American musician',
+              'life-span': {
+                begin: '1958-06-07',
+                end: '2016-04-21',
+                ended: true,
+              },
+              relations: [
+                {
+                  type: 'wikipedia',
+                  url: {
+                    resource: 'https://en.wikipedia.org/wiki/Prince_(musician)',
+                  },
+                },
+              ],
+              genres: [{ name: 'funk', count: 10 }],
+              tags: [{ name: 'pop', count: 6 }],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+
+      if (url.pathname === '/v3/music/artist-prince') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              artistthumb: [{ url: 'https://images.example/prince.jpg' }],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+
+      if (url.pathname === '/ws/2/release-group') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              'release-groups': [
+                {
+                  id: 'rg-purple-rain',
+                  title: 'Purple Rain',
+                  'primary-type': 'Album',
+                  'first-release-date': '1984-06-25',
+                  'artist-credit': [
+                    { artist: { id: 'artist-prince', name: 'Prince' } },
+                  ],
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+
+      if (url.pathname === '/release-group/rg-purple-rain') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              images: [
+                {
+                  front: true,
+                  thumbnails: {
+                    '500':
+                      'https://coverartarchive.org/release-group/rg-purple-rain/500.jpg',
+                  },
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+
+      if (url.pathname === '/api/rest_v1/page/summary/Prince_(musician)') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              extract:
+                'Prince was an American singer, songwriter, musician, and record producer.',
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+
+      return Promise.resolve(new Response('', { status: 404 }));
+    });
+
+    const result = await service.getArtistProfile('artist-prince', 10);
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        id: 'artist-prince',
+        musicbrainzArtistId: 'artist-prince',
+        name: 'Prince',
+        imageUrl: 'https://images.example/prince.jpg',
+        imageSource: 'fanart_tv',
+        description:
+          'Prince was an American singer, songwriter, musician, and record producer.',
+        descriptionSource: 'MusicBrainz-linked Wikipedia',
+        genres: ['funk', 'pop'],
+      }),
+    );
+    expect(result.catalog).toEqual([
+      expect.objectContaining({
+        musicbrainzReleaseGroupId: 'rg-purple-rain',
+        title: 'Purple Rain',
+        coverArtUrl:
+          'https://coverartarchive.org/release-group/rg-purple-rain/500.jpg',
+      }),
+    ]);
+  });
+
+  it('falls back to release-group search when artist album browse is empty', async () => {
+    process.env.FANART_API_KEY = 'fanart-key';
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(input.toString());
+
+      if (url.pathname === '/ws/2/artist/artist-prince') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: 'artist-prince',
+              name: 'Prince',
+              'sort-name': 'Prince',
+              type: 'Person',
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+
+      if (url.pathname === '/v3/music/artist-prince') {
+        return Promise.resolve(
+          new Response(JSON.stringify({}), { status: 200 }),
+        );
+      }
+
+      if (
+        url.pathname === '/ws/2/release-group' &&
+        url.searchParams.get('artist') === 'artist-prince'
+      ) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ 'release-groups': [] }), {
+            status: 200,
+          }),
+        );
+      }
+
+      if (
+        url.pathname === '/ws/2/release-group' &&
+        url.searchParams.get('query') ===
+          'arid:artist-prince AND primarytype:"album"'
+      ) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              'release-groups': [
+                {
+                  id: 'rg-sign-o-the-times',
+                  title: 'Sign o the Times',
+                  'primary-type': 'Album',
+                  'first-release-date': '1987-03-30',
+                  'artist-credit': [
+                    { artist: { id: 'artist-prince', name: 'Prince' } },
+                  ],
+                },
+              ],
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+
+      if (url.pathname === '/release-group/rg-sign-o-the-times') {
+        return Promise.resolve(new Response('', { status: 404 }));
+      }
+
+      return Promise.resolve(new Response('', { status: 404 }));
+    });
+
+    const result = await service.getArtistProfile('artist-prince', 10);
+    const fallbackSearchUrl = mockFetch.mock.calls
+      .map((call) => new URL(call[0].toString()))
+      .find(
+        (url) =>
+          url.pathname === '/ws/2/release-group' &&
+          url.searchParams.get('query') ===
+            'arid:artist-prince AND primarytype:"album"',
+      );
+
+    expect(fallbackSearchUrl?.pathname).toBe('/ws/2/release-group');
+    expect(fallbackSearchUrl?.searchParams.get('query')).toBe(
+      'arid:artist-prince AND primarytype:"album"',
+    );
+    expect(result.catalog).toEqual([
+      expect.objectContaining({
+        musicbrainzReleaseGroupId: 'rg-sign-o-the-times',
+        title: 'Sign o the Times',
+      }),
+    ]);
+  });
+
   it('does not fall back to the sample URL when full MusicBrainz fails', async () => {
     mockFetch.mockResolvedValueOnce(
       new Response('bad gateway', { status: 502 }),

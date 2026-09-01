@@ -34,6 +34,14 @@ export class MusicBrainzController {
     return this.musicBrainzService.searchArtists(query, limit, offset);
   }
 
+  @Get('artists/:artistMbid/profile')
+  getArtistProfile(
+    @Param('artistMbid') artistMbid: string,
+    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+  ) {
+    return this.musicBrainzService.getArtistProfile(artistMbid, limit);
+  }
+
   @Get('release-groups/:id/cover-art')
   async getReleaseGroupCoverArt(@Param('id') id: string) {
     return {
