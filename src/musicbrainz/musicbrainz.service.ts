@@ -224,6 +224,8 @@ export class MusicBrainzService {
     'https://coverartarchive.org';
   private readonly maxSearchLimit = 20;
   private readonly maxSearchOffset = 1000;
+  private readonly artistCatalogPageSize = 100;
+  private readonly maxArtistCatalogLimit = 500;
   private readonly maxQueryLength = 120;
   private readonly requestTimeoutMs = 7000;
   private readonly personnelRequestTimeoutMs = 10000;
@@ -292,6 +294,14 @@ export class MusicBrainzService {
     }
 
     return Math.min(Math.max(Math.trunc(limit), 1), this.maxSearchLimit);
+  }
+
+  private normalizeArtistCatalogLimit(limit = this.maxArtistCatalogLimit) {
+    if (!Number.isFinite(limit)) {
+      return this.maxArtistCatalogLimit;
+    }
+
+    return Math.min(Math.max(Math.trunc(limit), 1), this.maxArtistCatalogLimit);
   }
 
   private normalizeOffset(offset = 0): number {
@@ -1386,42 +1396,61 @@ export class MusicBrainzService {
     return this.fetchJson<any>(url, this.personnelRequestTimeoutMs);
   }
 
-  private async fetchArtistAlbumReleaseGroups(artistMbid: string) {
-    const browseUrl = this.buildMusicBrainzUrl('/release-group', {
+  private async fetchArtistAlbumReleaseGroups(
+    artistMbid: string,
+    maxReleaseGroups = this.maxArtistCatalogLimit,
+  ) {
+    const fetchPagedReleaseGroups = async (
+      buildQuery: (
+        offset: number,
+        limit: number,
+      ) => Record<string, string | number>,
+    ) => {
+      const releaseGroups: any[] = [];
+
+      while (releaseGroups.length < maxReleaseGroups) {
+        const limit = Math.min(
+          this.artistCatalogPageSize,
+          maxReleaseGroups - releaseGroups.length,
+        );
+        const offset = releaseGroups.length;
+        const url = this.buildMusicBrainzUrl('/release-group', {
+          ...buildQuery(offset, limit),
+          fmt: 'json',
+          limit,
+          offset: offset > 0 ? offset : undefined,
+          inc: 'artist-credits',
+        });
+        const response = await this.fetchJson<{ 'release-groups'?: any[] }>(
+          url,
+          this.personnelRequestTimeoutMs,
+        );
+        const page = Array.isArray(response?.['release-groups'])
+          ? response['release-groups']
+          : [];
+
+        releaseGroups.push(...page);
+
+        if (page.length < limit) {
+          break;
+        }
+      }
+
+      return releaseGroups;
+    };
+
+    const browseReleaseGroups = await fetchPagedReleaseGroups(() => ({
       artist: artistMbid,
       type: 'album',
-      fmt: 'json',
-      limit: 50,
-      inc: 'artist-credits',
-    });
-    const browseResponse = await this.fetchJson<{ 'release-groups'?: any[] }>(
-      browseUrl,
-      this.personnelRequestTimeoutMs,
-    );
-    const browseReleaseGroups = Array.isArray(
-      browseResponse?.['release-groups'],
-    )
-      ? browseResponse['release-groups']
-      : [];
+    }));
 
     if (browseReleaseGroups.length > 0) {
       return browseReleaseGroups;
     }
 
-    const searchUrl = this.buildMusicBrainzUrl('/release-group', {
+    return fetchPagedReleaseGroups(() => ({
       query: `arid:${artistMbid} AND primarytype:"album"`,
-      fmt: 'json',
-      limit: 50,
-      inc: 'artist-credits',
-    });
-    const searchResponse = await this.fetchJson<{ 'release-groups'?: any[] }>(
-      searchUrl,
-      this.personnelRequestTimeoutMs,
-    );
-
-    return Array.isArray(searchResponse?.['release-groups'])
-      ? searchResponse['release-groups']
-      : [];
+    }));
   }
 
   private async fetchArtistDetails(artistMbid: string) {
@@ -2258,7 +2287,7 @@ export class MusicBrainzService {
       throw new BadRequestException('artistMbid is required');
     }
 
-    const normalizedLimit = this.normalizeLimit(limit);
+    const normalizedLimit = this.normalizeArtistCatalogLimit(limit);
     const startedAt = Date.now();
 
     try {
@@ -2269,7 +2298,10 @@ export class MusicBrainzService {
           : 'Unknown Artist';
       const [fanartImage, releaseGroups, description] = await Promise.all([
         this.getFanartArtistSearchImage(normalizedArtistMbid, artistName),
-        this.fetchArtistAlbumReleaseGroups(normalizedArtistMbid),
+        this.fetchArtistAlbumReleaseGroups(
+          normalizedArtistMbid,
+          normalizedLimit,
+        ),
         this.getArtistDescription(metadata),
       ]);
       const artist = this.normalizeArtist(metadata, fanartImage);

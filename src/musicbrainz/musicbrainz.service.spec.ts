@@ -1272,6 +1272,93 @@ describe('MusicBrainzService', () => {
     ]);
   });
 
+  it('paginates artist catalog release groups beyond the search result limit', async () => {
+    const buildReleaseGroups = (start: number, count: number) =>
+      Array.from({ length: count }, (_unused, index) => {
+        const albumNumber = start + index;
+
+        return {
+          id: `rg-album-${albumNumber}`,
+          title: `Album ${albumNumber}`,
+          'primary-type': 'Album',
+          'first-release-date': `19${String(albumNumber).padStart(2, '0')}-01-01`,
+          'artist-credit': [
+            { artist: { id: 'artist-long', name: 'Long Catalog Artist' } },
+          ],
+        };
+      });
+
+    mockFetch.mockImplementation((input: RequestInfo | URL) => {
+      const url = new URL(input.toString());
+
+      if (url.pathname === '/ws/2/artist/artist-long') {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: 'artist-long',
+              name: 'Long Catalog Artist',
+              'sort-name': 'Long Catalog Artist',
+              type: 'Group',
+            }),
+            { status: 200 },
+          ),
+        );
+      }
+
+      if (
+        url.pathname === '/ws/2/release-group' &&
+        url.searchParams.get('artist') === 'artist-long'
+      ) {
+        const offset = Number.parseInt(
+          url.searchParams.get('offset') || '0',
+          10,
+        );
+        const releaseGroups =
+          offset === 0
+            ? buildReleaseGroups(1, 100)
+            : offset === 100
+              ? buildReleaseGroups(101, 20)
+              : [];
+
+        return Promise.resolve(
+          new Response(JSON.stringify({ 'release-groups': releaseGroups }), {
+            status: 200,
+          }),
+        );
+      }
+
+      if (url.pathname.startsWith('/release-group/')) {
+        return Promise.resolve(new Response('', { status: 404 }));
+      }
+
+      if (url.pathname.startsWith('/ws/2/release-group/')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ releases: [] }), { status: 200 }),
+        );
+      }
+
+      return Promise.resolve(new Response('', { status: 404 }));
+    });
+
+    const result = await service.getArtistProfile('artist-long', 500);
+    const releaseGroupBrowseRequests = mockFetch.mock.calls
+      .map((call) => new URL(call[0].toString()))
+      .filter(
+        (url) =>
+          url.pathname === '/ws/2/release-group' &&
+          url.searchParams.get('artist') === 'artist-long',
+      );
+
+    expect(result.catalog).toHaveLength(120);
+    expect(releaseGroupBrowseRequests).toHaveLength(2);
+    expect(releaseGroupBrowseRequests[0].searchParams.get('limit')).toBe('100');
+    expect(releaseGroupBrowseRequests[0].searchParams.get('offset')).toBeNull();
+    expect(releaseGroupBrowseRequests[1].searchParams.get('limit')).toBe('100');
+    expect(releaseGroupBrowseRequests[1].searchParams.get('offset')).toBe(
+      '100',
+    );
+  });
+
   it('does not fall back to the sample URL when full MusicBrainz fails', async () => {
     mockFetch.mockResolvedValueOnce(
       new Response('bad gateway', { status: 502 }),

@@ -37,7 +37,7 @@ export class MusicBrainzController {
   @Get('artists/:artistMbid/profile')
   getArtistProfile(
     @Param('artistMbid') artistMbid: string,
-    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    @Query('limit', new DefaultValuePipe(500), ParseIntPipe) limit: number,
   ) {
     return this.musicBrainzService.getArtistProfile(artistMbid, limit);
   }
