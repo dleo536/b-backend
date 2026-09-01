@@ -961,6 +961,10 @@ describe('MusicBrainzService', () => {
               type: 'Person',
               country: 'US',
               disambiguation: 'American rapper and actor',
+              'life-span': {
+                begin: '1969-06-15',
+                ended: false,
+              },
             },
           ],
         }),
@@ -983,11 +987,71 @@ describe('MusicBrainzService', () => {
         type: 'Person',
         country: 'US',
         disambiguation: 'American rapper and actor',
+        lifeSpan: {
+          begin: '1969-06-15',
+          end: null,
+          ended: false,
+        },
+        imageUrl: null,
+        imageSource: null,
+        imageType: null,
         images: [],
         genres: [],
         source: 'musicbrainz',
         sourceProvider: 'musicbrainz',
       },
+    ]);
+  });
+
+  it('enriches artist search results with fanart.tv artist thumbnails', async () => {
+    process.env.FANART_API_KEY = 'fanart-secret';
+    process.env.FANART_BASE_URL = 'https://fanart.example/v3/music';
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          artists: [
+            {
+              id: 'artist-prince',
+              name: 'Prince',
+              'sort-name': 'Prince',
+              type: 'Person',
+              country: 'US',
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    );
+    mockFetch.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          artistbackground: [
+            { url: 'https://images.example/prince-background.jpg' },
+          ],
+          artistthumb: [{ url: 'https://images.example/prince-thumb.jpg' }],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const result = await service.searchArtists('Prince', 10);
+    const searchUrl = new URL(mockFetch.mock.calls[0][0].toString());
+    const fanartUrl = new URL(mockFetch.mock.calls[1][0].toString());
+
+    expect(searchUrl.pathname).toBe('/ws/2/artist');
+    expect(fanartUrl.origin).toBe('https://fanart.example');
+    expect(fanartUrl.pathname).toBe('/v3/music/artist-prince');
+    expect(fanartUrl.searchParams.get('api_key')).toBe('fanart-secret');
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: 'artist-prince',
+        musicbrainzArtistId: 'artist-prince',
+        name: 'Prince',
+        imageUrl: 'https://images.example/prince-thumb.jpg',
+        imageSource: 'fanart_tv',
+        imageType: 'artistthumb',
+        images: [{ url: 'https://images.example/prince-thumb.jpg' }],
+      }),
     ]);
   });
 

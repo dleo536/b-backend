@@ -47,6 +47,14 @@ export type NormalizedArtistSearchResult = {
   type: string | null;
   country: string | null;
   disambiguation: string | null;
+  lifeSpan: {
+    begin: string | null;
+    end: string | null;
+    ended: boolean | null;
+  };
+  imageUrl: string | null;
+  imageSource: 'fanart_tv' | null;
+  imageType: ArtistImageType | null;
   images: Array<{ url: string }>;
   genres: string[];
   source: 'musicbrainz';
@@ -165,6 +173,12 @@ type AlbumArtistImageResponse = {
   attributionText: string | null;
 };
 
+type ArtistSearchImageResult = {
+  imageUrl: string | null;
+  imageSource: 'fanart_tv' | null;
+  imageType: ArtistImageType | null;
+};
+
 type MutablePersonnelPerson = {
   name: string;
   musicbrainzArtistId: string | null;
@@ -192,6 +206,8 @@ export class MusicBrainzService {
   private readonly coverArtTimeoutMs = 2500;
   private readonly maxOtherAlbumsCoverArtLookups = 24;
   private readonly otherAlbumsCoverArtConcurrency = 6;
+  private readonly maxArtistSearchImageLookups = 10;
+  private readonly artistSearchImageConcurrency = 5;
   private readonly cacheTtlMs = 10 * 60 * 1000;
   private readonly artistImageFoundCacheTtlMs = 30 * 24 * 60 * 60 * 1000;
   private readonly artistImageMissingCacheTtlMs = 7 * 24 * 60 * 60 * 1000;
@@ -203,6 +219,10 @@ export class MusicBrainzService {
   private readonly artistImageCache = new Map<
     string,
     CacheEntry<AlbumArtistImageResponse>
+  >();
+  private readonly artistSearchImageCache = new Map<
+    string,
+    CacheEntry<ArtistSearchImageResult>
   >();
   private readonly responseCache = new Map<string, CacheEntry<unknown>>();
 
@@ -353,28 +373,33 @@ export class MusicBrainzService {
     return url;
   }
 
-  private selectFanartArtistImage(fanartResponse: any): {
-    imageUrl: string | null;
-    imageType: ArtistImageType | null;
-  } {
-    const preferredTypes: ArtistImageType[] = [
+  private selectFanartArtistImage(
+    fanartResponse: any,
+    preferredTypes: ArtistImageType[] = [
       'artistbackground',
       'artistthumb',
       'musicbanner',
       'hdmusiclogo',
-    ];
-
+    ],
+  ): {
+    imageUrl: string | null;
+    imageType: ArtistImageType | null;
+  } {
     for (const imageType of preferredTypes) {
       const images = Array.isArray(fanartResponse?.[imageType])
         ? fanartResponse[imageType]
         : [];
       const imageUrl = images
-        .map((image) => image?.url)
+        .map((image) =>
+          typeof image === 'string'
+            ? image
+            : image?.url || image?.image || image?.href,
+        )
         .find((url) => typeof url === 'string' && url.trim());
 
       if (imageUrl) {
         return {
-          imageUrl: imageUrl.trim(),
+          imageUrl: this.normalizeCoverArtUrl(imageUrl) || imageUrl.trim(),
           imageType,
         };
       }
@@ -515,6 +540,7 @@ export class MusicBrainzService {
   private async fetchFanartArtistImage(
     artistMbid: string,
     artistName: string | null,
+    preferredTypes?: ArtistImageType[],
   ): Promise<
     Pick<AlbumArtistImageResponse, 'imageUrl' | 'imageType' | 'attributionText'>
   > {
@@ -593,7 +619,7 @@ export class MusicBrainzService {
       }
 
       const data = await response.json();
-      const selectedImage = this.selectFanartArtistImage(data);
+      const selectedImage = this.selectFanartArtistImage(data, preferredTypes);
       this.logger.log(
         JSON.stringify({
           provider: 'fanart_tv',
@@ -636,6 +662,39 @@ export class MusicBrainzService {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private async getFanartArtistSearchImage(
+    artistMbid: string,
+    artistName: string | null,
+  ): Promise<ArtistSearchImageResult> {
+    const cacheKey = `artist-search-image:${artistMbid}`;
+    const cached = this.getCached(this.artistSearchImageCache, cacheKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+
+    const fanartImage = await this.fetchFanartArtistImage(
+      artistMbid,
+      artistName,
+      ['artistthumb', 'artistbackground', 'musicbanner'],
+    );
+    const result: ArtistSearchImageResult = {
+      imageUrl: fanartImage.imageUrl,
+      imageSource: fanartImage.imageUrl ? 'fanart_tv' : null,
+      imageType: fanartImage.imageType,
+    };
+
+    this.setCached(
+      this.artistSearchImageCache,
+      cacheKey,
+      result,
+      result.imageUrl
+        ? this.artistImageFoundCacheTtlMs
+        : this.artistImageMissingCacheTtlMs,
+    );
+
+    return result;
   }
 
   private createProviderUnavailable(
@@ -1811,10 +1870,16 @@ export class MusicBrainzService {
     };
   }
 
-  private normalizeArtist(artist: any): NormalizedArtistSearchResult | null {
+  private normalizeArtist(
+    artist: any,
+    image: ArtistSearchImageResult | null = null,
+  ): NormalizedArtistSearchResult | null {
     if (!artist?.id || !artist?.name) {
       return null;
     }
+
+    const lifeSpan = artist?.['life-span'] || {};
+    const imageUrl = image?.imageUrl || null;
 
     return {
       id: artist.id,
@@ -1828,7 +1893,21 @@ export class MusicBrainzService {
         typeof artist?.disambiguation === 'string'
           ? artist.disambiguation
           : null,
-      images: [],
+      lifeSpan: {
+        begin:
+          typeof lifeSpan?.begin === 'string' && lifeSpan.begin.trim()
+            ? lifeSpan.begin.trim()
+            : null,
+        end:
+          typeof lifeSpan?.end === 'string' && lifeSpan.end.trim()
+            ? lifeSpan.end.trim()
+            : null,
+        ended: typeof lifeSpan?.ended === 'boolean' ? lifeSpan.ended : null,
+      },
+      imageUrl,
+      imageSource: image?.imageSource || null,
+      imageType: image?.imageType || null,
+      images: imageUrl ? [{ url: imageUrl }] : [],
       genres: [],
       source: 'musicbrainz',
       sourceProvider: 'musicbrainz',
@@ -1888,14 +1967,57 @@ export class MusicBrainzService {
     });
 
     return this.unavailableIfMusicBrainzFails(async () => {
+      const startedAt = Date.now();
       const response = await this.fetchJson<{ artists?: any[] }>(url);
       const artists = Array.isArray(response?.artists) ? response.artists : [];
-
-      return artists
-        .map((artist) => this.normalizeArtist(artist))
+      const fanartLookupCandidates = artists
+        .filter((artist) => typeof artist?.id === 'string' && artist.id)
+        .slice(0, this.maxArtistSearchImageLookups);
+      const fanartEnabled = Boolean(process.env.FANART_API_KEY?.trim());
+      const fanartImageResults = fanartEnabled
+        ? await this.mapWithConcurrency(
+            fanartLookupCandidates,
+            this.artistSearchImageConcurrency,
+            async (artist) =>
+              this.getFanartArtistSearchImage(
+                artist.id,
+                typeof artist?.name === 'string' ? artist.name : null,
+              ),
+          )
+        : [];
+      const fanartImageByArtistMbid = new Map(
+        fanartLookupCandidates.map((artist, index) => [
+          artist.id,
+          fanartImageResults[index] || null,
+        ]),
+      );
+      const normalizedArtists = artists
+        .map((artist) =>
+          this.normalizeArtist(
+            artist,
+            fanartImageByArtistMbid.get(artist?.id) || null,
+          ),
+        )
         .filter(
           (artist): artist is NormalizedArtistSearchResult => artist !== null,
         );
+
+      this.logger.log(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'artist_search',
+          query: normalizedQuery,
+          durationMs: Date.now() - startedAt,
+          artistCount: normalizedArtists.length,
+          fanartLookupCount: fanartLookupCandidates.length,
+          fanartImageHitCount: normalizedArtists.filter((artist) =>
+            Boolean(artist.imageUrl),
+          ).length,
+          fanartEnabled,
+        }),
+      );
+
+      return normalizedArtists;
     });
   }
 
