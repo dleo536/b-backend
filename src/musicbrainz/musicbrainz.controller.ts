@@ -44,8 +44,11 @@ export class MusicBrainzController {
 
   @Get('release-groups/:id/cover-art')
   async getReleaseGroupCoverArt(@Param('id') id: string) {
-    return {
-      coverArtUrl: await this.musicBrainzService.getReleaseGroupCoverArt(id),
-    };
+    return this.musicBrainzService.getReleaseGroupCoverArt(id);
+  }
+
+  @Get('release-groups/:id')
+  async getReleaseGroupAlbum(@Param('id') id: string) {
+    return this.musicBrainzService.getReleaseGroupAlbum(id);
   }
 }

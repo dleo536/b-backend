@@ -2446,15 +2446,112 @@ export class MusicBrainzService {
     }
   }
 
-  getReleaseGroupCoverArt(releaseGroupMbid: string) {
-    if (!releaseGroupMbid?.trim()) {
+  async getReleaseGroupCoverArt(releaseGroupMbid: string) {
+    const normalizedReleaseGroupMbid = releaseGroupMbid?.trim();
+    if (!normalizedReleaseGroupMbid) {
       throw new BadRequestException('releaseGroupMbid is required');
     }
 
-    return this.fetchCoverArtArchiveUrl(
-      'release-group',
-      releaseGroupMbid.trim(),
-    );
+    try {
+      const releaseGroup = await this.fetchReleaseGroupDetails(
+        normalizedReleaseGroupMbid,
+      );
+      const coverArt = await this.resolveCoverArt({
+        ...releaseGroup,
+        id: normalizedReleaseGroupMbid,
+      });
+
+      return {
+        releaseGroupMbid: normalizedReleaseGroupMbid,
+        coverArtUrl: coverArt?.url || null,
+        coverUrl: coverArt?.url || null,
+        coverArtSource: coverArt?.source || null,
+        coverArtProvider: coverArt?.provider || null,
+        coverArtAttribution: coverArt?.attribution || null,
+        sourceAlbumId:
+          coverArt?.musicbrainzReleaseId ||
+          coverArt?.appleMusicAlbumId ||
+          coverArt?.fanartReleaseGroupMbid ||
+          null,
+      };
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'release_group_cover_art',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          error:
+            (error as Error)?.message ||
+            'MusicBrainz release group cover lookup failed',
+        }),
+      );
+
+      return {
+        releaseGroupMbid: normalizedReleaseGroupMbid,
+        coverArtUrl: null,
+        coverUrl: null,
+        coverArtSource: null,
+        coverArtProvider: null,
+        coverArtAttribution: null,
+        sourceAlbumId: null,
+      };
+    }
+  }
+
+  async getReleaseGroupAlbum(releaseGroupMbid: string) {
+    const normalizedReleaseGroupMbid = releaseGroupMbid?.trim();
+    if (!normalizedReleaseGroupMbid) {
+      throw new BadRequestException('releaseGroupMbid is required');
+    }
+
+    const startedAt = Date.now();
+
+    try {
+      const releaseGroup = await this.fetchReleaseGroupDetails(
+        normalizedReleaseGroupMbid,
+      );
+      const coverArt = await this.resolveCoverArt({
+        ...releaseGroup,
+        id: normalizedReleaseGroupMbid,
+      });
+      const album = this.normalizeReleaseGroup(
+        {
+          ...releaseGroup,
+          id: normalizedReleaseGroupMbid,
+        },
+        coverArt,
+      );
+
+      if (!album) {
+        throw new BadRequestException('Release group is not an album');
+      }
+
+      this.logger.log(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'release_group_album',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          hasCoverArt: Boolean(album.coverArtUrl),
+          durationMs: Date.now() - startedAt,
+        }),
+      );
+
+      return album;
+    } catch (error) {
+      this.logger.warn(
+        JSON.stringify({
+          provider: 'musicbrainz',
+          feature: 'release_group_album',
+          releaseGroupMbid: normalizedReleaseGroupMbid,
+          durationMs: Date.now() - startedAt,
+          error:
+            (error as Error)?.message ||
+            'MusicBrainz release group album lookup failed',
+        }),
+      );
+
+      throw error;
+    }
   }
 
   async getAlbumTracks(releaseGroupMbid: string): Promise<AlbumTracksResponse> {
