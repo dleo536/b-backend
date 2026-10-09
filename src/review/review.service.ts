@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Not, Repository } from 'typeorm';
@@ -15,6 +16,7 @@ import { User } from '../user/user.entity';
 import { UserFollow } from '../user/follow.entity';
 import { AuthUserContextService } from '../auth/auth-user-context.service';
 import { ModerationService } from '../moderation/moderation.service';
+import { MetadataCatalogService } from '../metadata/metadata-catalog.service';
 
 @Injectable()
 export class ReviewService {
@@ -29,6 +31,7 @@ export class ReviewService {
     private reviewLikeRepository: Repository<ReviewLike>,
     private readonly authUserContextService: AuthUserContextService,
     private readonly moderationService: ModerationService,
+    @Optional() private readonly metadataCatalog?: MetadataCatalogService,
   ) {}
 
   private isUuid(value: string): boolean {
@@ -253,6 +256,26 @@ export class ReviewService {
       throw new NotFoundException('Authenticated user profile not found');
     }
 
+    if (!createReviewDto.releaseGroupMbId && !createReviewDto.spotifyAlbumId) {
+      throw new BadRequestException(
+        'A MusicBrainz or Spotify album ID is required',
+      );
+    }
+    const identity = this.metadataCatalog
+      ? await this.metadataCatalog.ensureReviewIdentity(createReviewDto)
+      : null;
+    const releaseGroupMbId =
+      identity?.musicbrainzReleaseGroupId ||
+      createReviewDto.releaseGroupMbId ||
+      null;
+    const spotifyAlbumId =
+      identity?.spotifyAlbumId || createReviewDto.spotifyAlbumId;
+    const identityConditions = [
+      ...(releaseGroupMbId ? [{ releaseGroupMbId }] : []),
+      ...(spotifyAlbumId ? [{ spotifyAlbumId }] : []),
+      ...(identity ? [{ albumId: identity.id }] : []),
+    ];
+
     this.moderationService.assertTextFieldsAreAllowed([
       { label: 'review headline', value: createReviewDto.headline },
       { label: 'review body', value: createReviewDto.body },
@@ -266,11 +289,11 @@ export class ReviewService {
     );
     if (!isDraft) {
       const existingReview = await this.reviewRepository.findOne({
-        where: {
+        where: identityConditions.map((condition) => ({
+          ...condition,
           userId: user.id,
-          releaseGroupMbId: createReviewDto.releaseGroupMbId,
           isDraft: false,
-        },
+        })),
       });
 
       if (existingReview) {
@@ -283,10 +306,12 @@ export class ReviewService {
     const review = this.reviewRepository.create({
       userId: user.id,
       firebaseUid: currentUserOauthId,
-      releaseGroupMbId: createReviewDto.releaseGroupMbId,
-      releaseMbId: createReviewDto.releaseMbId,
-      artistMbId: createReviewDto.artistMbId,
-      spotifyAlbumId: createReviewDto.spotifyAlbumId,
+      albumId: identity?.id,
+      releaseGroupMbId,
+      releaseMbId:
+        identity?.musicbrainzReleaseId || createReviewDto.releaseMbId,
+      artistMbId: identity?.musicbrainzArtistId || createReviewDto.artistMbId,
+      spotifyAlbumId,
       albumTitleSnapshot: createReviewDto.albumTitleSnapshot,
       artistNameSnapshot: createReviewDto.artistNameSnapshot,
       coverUrlSnapshot: createReviewDto.coverUrlSnapshot,
@@ -314,6 +339,13 @@ export class ReviewService {
     spotifyAlbumId?: string,
     releaseGroupMbId?: string,
   ) {
+    if (this.metadataCatalog && (spotifyAlbumId || releaseGroupMbId)) {
+      const mapped = await this.metadataCatalog.findAlbum(
+        spotifyAlbumId || releaseGroupMbId!,
+      );
+      spotifyAlbumId ||= mapped?.spotifyAlbumId || undefined;
+      releaseGroupMbId ||= mapped?.musicbrainzReleaseGroupId || undefined;
+    }
     const normalizedViewerUid = viewerUid?.trim() || undefined;
     const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
     const viewerUserId = viewerUser?.id ?? null;
@@ -624,11 +656,19 @@ export class ReviewService {
 
     if (!nextIsDraft) {
       const existingPublishedReview = await this.reviewRepository.findOne({
-        where: {
+        where: [
+          ...(review.releaseGroupMbId
+            ? [{ releaseGroupMbId: review.releaseGroupMbId }]
+            : []),
+          ...(review.spotifyAlbumId
+            ? [{ spotifyAlbumId: review.spotifyAlbumId }]
+            : []),
+          ...(review.albumId ? [{ albumId: review.albumId }] : []),
+        ].map((condition) => ({
+          ...condition,
           userId: review.userId,
-          releaseGroupMbId: review.releaseGroupMbId,
           isDraft: false,
-        },
+        })),
       });
 
       if (existingPublishedReview && existingPublishedReview.id !== review.id) {

@@ -10,6 +10,7 @@ const normalizeVisibility = (value?: string) =>
 export const toReviewResponse = (review: Review) => ({
   id: review.id,
   userId: review.userId,
+  albumId: review.albumId ?? null,
   releaseGroupMbId: review.releaseGroupMbId,
   releaseMbId: review.releaseMbId ?? null,
   artistMbId: review.artistMbId ?? null,

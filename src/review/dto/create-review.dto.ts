@@ -11,6 +11,8 @@ import {
   IsOptional,
   IsString,
   IsUrl,
+  IsUUID,
+  Matches,
   Length,
   Max,
   Min,
@@ -25,9 +27,15 @@ const LaunchReviewVisibilityValues = [
 ] as const;
 
 export class CreateReviewDto {
+  @IsOptional()
+  @IsUUID()
+  albumId?: string;
+
+  @IsOptional()
+  @IsUUID()
   @IsString()
   @Length(1, 36)
-  releaseGroupMbId: string;
+  releaseGroupMbId?: string;
 
   @IsOptional()
   @IsString()
@@ -42,6 +50,7 @@ export class CreateReviewDto {
   @IsOptional()
   @IsString()
   @Length(1, 64)
+  @Matches(/^[A-Za-z0-9]{22}$/)
   spotifyAlbumId?: string;
 
   @IsString()

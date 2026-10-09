@@ -2,6 +2,8 @@ import {
   BadGatewayException,
   BadRequestException,
   Injectable,
+  HttpException,
+  Logger,
   ServiceUnavailableException,
 } from '@nestjs/common';
 
@@ -17,9 +19,26 @@ type SpotifyResponseCacheEntry = {
 
 @Injectable()
 export class SpotifyService {
-  private readonly authUrl = 'https://accounts.spotify.com/api/token';
-  private readonly apiBaseUrl = 'https://api.spotify.com/v1';
-  private readonly maxSearchLimit = 25;
+  private readonly logger = new Logger(SpotifyService.name);
+  private get authUrl() {
+    return `${this.officialBaseUrl(process.env.SPOTIFY_ACCOUNTS_URL, 'https://accounts.spotify.com')}/api/token`;
+  }
+  private get apiBaseUrl() {
+    return this.officialBaseUrl(
+      process.env.SPOTIFY_BASE_URL,
+      'https://api.spotify.com/v1',
+    );
+  }
+  private officialBaseUrl(configured: string | undefined, fallback: string) {
+    const value = (configured?.trim() || fallback).replace(/\/+$/, '');
+    // Never send credentials/tokens to an arbitrary configured host.
+    if (value !== fallback)
+      throw new ServiceUnavailableException(
+        'Spotify base URL must use the official Spotify API',
+      );
+    return value;
+  }
+  private readonly maxSearchLimit = 10;
   private readonly maxSearchOffset = 1000;
   private readonly maxQueryLength = 120;
   private readonly responseCacheTtlMs = 5 * 60 * 1000;
@@ -58,6 +77,7 @@ export class SpotifyService {
     );
 
     const response = await fetch(this.authUrl, {
+      signal: AbortSignal.timeout(10000),
       method: 'POST',
       headers: {
         Authorization: `Basic ${credentials}`,
@@ -69,11 +89,11 @@ export class SpotifyService {
     });
 
     if (!response.ok) {
-      const errorBody = await response.text();
+      this.logger.warn(
+        `Spotify token refresh failed status=${response.status}`,
+      );
       throw new BadGatewayException(
-        `Spotify token request failed (${response.status}): ${
-          errorBody.slice(0, 180) || 'unknown error'
-        }`,
+        `Spotify token request failed (${response.status})`,
       );
     }
 
@@ -93,7 +113,9 @@ export class SpotifyService {
 
     this.cachedToken = accessToken;
     this.tokenExpiresAt =
-      Date.now() + Math.max(expiresInSeconds - 60, 30) * 1000;
+      Date.now() +
+      Math.max(expiresInSeconds - Math.min(60, expiresInSeconds / 2), 1) * 1000;
+    this.logger.log('Spotify token refresh succeeded');
 
     return accessToken;
   }
@@ -104,9 +126,14 @@ export class SpotifyService {
     }
 
     if (!this.tokenPromise) {
-      this.tokenPromise = this.requestNewAccessToken().finally(() => {
-        this.tokenPromise = null;
-      });
+      this.tokenPromise = this.requestNewAccessToken()
+        .catch((error) => {
+          this.logger.warn('Spotify token refresh failed');
+          throw error;
+        })
+        .finally(() => {
+          this.tokenPromise = null;
+        });
     }
 
     return this.tokenPromise;
@@ -228,6 +255,7 @@ export class SpotifyService {
     const url = this.buildApiUrl(pathname, query);
 
     const response = await fetch(url, {
+      signal: AbortSignal.timeout(10000),
       method: 'GET',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -241,11 +269,21 @@ export class SpotifyService {
     }
 
     if (!response.ok) {
-      const errorBody = await response.text();
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get('retry-after') || 60);
+        this.logger.warn(
+          `Spotify rate limited retryAfterSeconds=${retryAfter}`,
+        );
+        throw new HttpException(
+          {
+            message: 'Spotify rate limit reached. Retry later.',
+            retryAfterSeconds: retryAfter,
+          },
+          429,
+        );
+      }
       throw new BadGatewayException(
-        `Spotify API request failed (${response.status}): ${
-          errorBody.slice(0, 180) || 'unknown error'
-        }`,
+        `Spotify API request failed (${response.status})`,
       );
     }
 
@@ -293,11 +331,9 @@ export class SpotifyService {
       throw new BadRequestException('albumId is required');
     }
 
-    const response = await this.fetchSpotifyJson<{ items?: unknown[] }>(
+    return this.collectPages(
       `/albums/${encodeURIComponent(albumId.trim())}/tracks`,
     );
-
-    return response.items ?? [];
   }
 
   async searchAlbums(query: string, limit = 10, offset = 0, market?: string) {
@@ -306,13 +342,24 @@ export class SpotifyService {
     const normalizedOffset = this.normalizeOffset(offset);
     const normalizedMarket = this.normalizeMarket(market);
 
-    return this.fetchSpotifyJson('/search', {
+    const startedAt = Date.now();
+    const result = await this.fetchSpotifyJson<any>('/search', {
       q: normalizedQuery,
       type: 'album',
       limit: normalizedLimit,
       offset: normalizedOffset,
       market: normalizedMarket,
     });
+    this.logger.log(
+      JSON.stringify({
+        event: 'spotify_search',
+        type: 'album',
+        query: normalizedQuery,
+        durationMs: Date.now() - startedAt,
+        resultCount: result.albums?.items?.length || 0,
+      }),
+    );
+    return result;
   }
 
   async searchArtists(query: string, limit = 10, offset = 0) {
@@ -320,12 +367,23 @@ export class SpotifyService {
     const normalizedLimit = this.normalizeLimit(limit);
     const normalizedOffset = this.normalizeOffset(offset);
 
-    return this.fetchSpotifyJson('/search', {
+    const startedAt = Date.now();
+    const result = await this.fetchSpotifyJson<any>('/search', {
       q: normalizedQuery,
       type: 'artist',
       limit: normalizedLimit,
       offset: normalizedOffset,
     });
+    this.logger.log(
+      JSON.stringify({
+        event: 'spotify_search',
+        type: 'artist',
+        query: normalizedQuery,
+        durationMs: Date.now() - startedAt,
+        resultCount: result.artists?.items?.length || 0,
+      }),
+    );
+    return result;
   }
 
   async getArtistById(artistId: string) {
@@ -352,13 +410,28 @@ export class SpotifyService {
       throw new BadRequestException('artistId is required');
     }
 
-    const result = await this.fetchSpotifyJson<{ items?: unknown[] }>(
+    return this.collectPages(
       `/artists/${encodeURIComponent(artistId.trim())}/albums`,
-      {
-        include_groups: 'album',
-      },
+      { include_groups: 'album,single,compilation' },
     );
+  }
 
-    return result.items ?? [];
+  private async collectPages(path: string, query: Record<string, string> = {}) {
+    const items: any[] = [];
+    for (let offset = 0; offset < 10000; ) {
+      const page = await this.fetchSpotifyJson<any>(path, {
+        ...query,
+        limit: 50,
+        offset,
+      });
+      const nextItems = page.items || [];
+      items.push(...nextItems);
+      offset += nextItems.length;
+      if (!nextItems.length || (!page.next && !(page.total > offset)))
+        return items;
+    }
+    throw new BadGatewayException(
+      'Spotify pagination exceeded the safety limit',
+    );
   }
 }

@@ -3,9 +3,17 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { ArrayContains, ILike, In, Not, Repository } from 'typeorm';
+import {
+  ArrayContains,
+  ArrayOverlap,
+  ILike,
+  In,
+  Not,
+  Repository,
+} from 'typeorm';
 import { CreateListDto } from './dto/create-list.dto';
 import { UpdateListDto } from './dto/update-list.dto';
 import { AlbumList, ListVisibility } from './list.entity';
@@ -14,6 +22,7 @@ import { UserFollow } from '../user/follow.entity';
 import { ListLike } from './list-like.entity';
 import { AuthUserContextService } from '../auth/auth-user-context.service';
 import { ModerationService } from '../moderation/moderation.service';
+import { MetadataCatalogService } from '../metadata/metadata-catalog.service';
 
 @Injectable()
 export class ListService {
@@ -28,6 +37,7 @@ export class ListService {
     private listLikeRepository: Repository<ListLike>,
     private readonly authUserContextService: AuthUserContextService,
     private readonly moderationService: ModerationService,
+    @Optional() private readonly metadataCatalog?: MetadataCatalogService,
   ) {}
 
   private isUuid(value: string): boolean {
@@ -205,14 +215,17 @@ export class ListService {
     };
   }
 
-  private appendAlbumFilter(where: any, albumId?: string) {
+  private appendAlbumFilter(where: any, albumId?: string, aliases?: string[]) {
     const normalizedAlbumId = albumId?.trim();
 
     if (!normalizedAlbumId) {
       return where;
     }
 
-    const albumFilter = ArrayContains([normalizedAlbumId]);
+    const albumFilter =
+      aliases && aliases.length > 1
+        ? ArrayOverlap(aliases)
+        : ArrayContains([normalizedAlbumId]);
 
     if (Array.isArray(where)) {
       return where.map((condition) => ({
@@ -302,6 +315,10 @@ export class ListService {
     title?: string,
     albumId?: string,
   ) {
+    const albumAliases =
+      albumId && this.metadataCatalog
+        ? await this.metadataCatalog.albumAliases(albumId)
+        : undefined;
     const normalizedViewerUid = viewerUid?.trim() || undefined;
     const viewerUser = await this.findUserByIdentifier(normalizedViewerUid);
     const viewerUserId = viewerUser?.id ?? null;
@@ -366,6 +383,7 @@ export class ListService {
           followedOnlyWhere = this.appendAlbumFilter(
             followedOnlyWhere,
             albumId,
+            albumAliases,
           );
           const followedOnlyCount = await this.listRepository.count({
             where: followedOnlyWhere,
@@ -377,7 +395,11 @@ export class ListService {
               viewerUser.id,
             );
             filteredWhere = this.appendTitleFilter(filteredWhere, title);
-            filteredWhere = this.appendAlbumFilter(filteredWhere, albumId);
+            filteredWhere = this.appendAlbumFilter(
+              filteredWhere,
+              albumId,
+              albumAliases,
+            );
             const filteredTotalCount = await this.listRepository.count({
               where: filteredWhere,
             });
@@ -418,7 +440,7 @@ export class ListService {
     }
 
     where = this.appendTitleFilter(where, title);
-    where = this.appendAlbumFilter(where, albumId);
+    where = this.appendAlbumFilter(where, albumId, albumAliases);
     where = this.appendExcludedOwnerIds(where, excludedOwnerIds);
 
     // Get the total count of matching documents

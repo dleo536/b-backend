@@ -44,6 +44,13 @@ export const ReviewVisibilityValues = ['public', 'friends', 'private'];
   where: '"isDraft" = false', // allow multiple drafts, but only one published review per album per user
 })
 @Index('idx_review_album_lookup', ['releaseGroupMbId'])
+@Index('IDX_review_spotify_album_lookup', ['spotifyAlbumId'])
+@Index('IDX_review_local_album_lookup', ['albumId'])
+@Index('IDX_review_spotify_album_published', ['userId', 'spotifyAlbumId'], {
+  unique: true,
+  where:
+    '"isDraft" = false AND "spotifyAlbumId" IS NOT NULL AND "releaseGroupMbId" IS NULL',
+})
 @Index('idx_review_visibility', ['visibility'])
 export class Review {
   @PrimaryGeneratedColumn('uuid')
@@ -64,8 +71,8 @@ export class Review {
   @Column({ type: 'uuid', nullable: true })
   albumId?: string; // If you keep a local Album table; otherwise omit.
 
-  @Column({ type: 'varchar', length: 36 })
-  releaseGroupMbId: string; // MusicBrainz Release Group ID (primary “album” key)
+  @Column({ type: 'varchar', length: 36, nullable: true })
+  releaseGroupMbId: string | null; // Preserved for MusicBrainz albums; never put a Spotify ID here.
 
   @Column({ type: 'varchar', length: 36, nullable: true })
   releaseMbId?: string; // Specific release pressing, optional

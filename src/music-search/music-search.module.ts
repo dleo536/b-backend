@@ -1,11 +1,10 @@
 import { Module } from '@nestjs/common';
-import { MusicBrainzModule } from '../musicbrainz/musicbrainz.module';
-import { SpotifyModule } from '../spotify/spotify.module';
+import { MetadataModule } from '../metadata/metadata.module';
 import { MusicSearchController } from './music-search.controller';
 import { MusicSearchService } from './music-search.service';
 
 @Module({
-  imports: [MusicBrainzModule, SpotifyModule],
+  imports: [MetadataModule],
   controllers: [MusicSearchController],
   providers: [MusicSearchService],
 })

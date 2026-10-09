@@ -32,8 +32,16 @@ export class SpotifyController {
   }
 
   @Get('albums/:id/tracks')
-  getAlbumTracks(@Param('id') id: string) {
-    return this.spotifyService.getAlbumTracks(id);
+  async getAlbumTracks(@Param('id') id: string) {
+    const items = await this.spotifyService.getAlbumTracks(id);
+    return {
+      items,
+      total: items.length,
+      offset: 0,
+      limit: items.length,
+      next: null,
+      previous: null,
+    };
   }
 
   @Get('artists/search')
@@ -51,8 +59,16 @@ export class SpotifyController {
   }
 
   @Get('artists/:id/albums')
-  getArtistAlbums(@Param('id') id: string) {
-    return this.spotifyService.getArtistAlbums(id);
+  async getArtistAlbums(@Param('id') id: string) {
+    const items = await this.spotifyService.getArtistAlbums(id);
+    return {
+      items,
+      total: items.length,
+      offset: 0,
+      limit: items.length,
+      next: null,
+      previous: null,
+    };
   }
 
   @Get('artists/:id')

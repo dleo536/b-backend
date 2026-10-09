@@ -2498,6 +2498,21 @@ export class MusicBrainzService {
     }
   }
 
+  // Only used after selecting MusicBrainz, for preserved release-only identities.
+  async getReleaseGroupIdForRelease(
+    releaseMbid: string,
+  ): Promise<string | null> {
+    const url = this.buildMusicBrainzUrl(
+      `/release/${encodeURIComponent(releaseMbid)}`,
+      { fmt: 'json', inc: 'release-groups' },
+    );
+    const release = await this.fetchJson<any>(
+      url,
+      this.personnelRequestTimeoutMs,
+    );
+    return release?.['release-group']?.id || null;
+  }
+
   async getReleaseGroupAlbum(releaseGroupMbid: string) {
     const normalizedReleaseGroupMbid = releaseGroupMbid?.trim();
     if (!normalizedReleaseGroupMbid) {

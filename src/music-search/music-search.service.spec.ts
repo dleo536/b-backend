@@ -1,52 +1,26 @@
 import { MusicSearchService } from './music-search.service';
 
 describe('MusicSearchService', () => {
-  const originalEnv = process.env;
-
-  afterEach(() => {
-    process.env = originalEnv;
-  });
-
-  it('always routes artist search to MusicBrainz even when album search provider is Spotify', async () => {
-    process.env = {
-      ...originalEnv,
-      MUSIC_SEARCH_PROVIDER: 'spotify',
+  it('delegates both searches to the selected metadata service', async () => {
+    const metadata = {
+      searchAlbums: jest.fn().mockResolvedValue([{ spotifyAlbumId: 'album' }]),
+      searchArtists: jest
+        .fn()
+        .mockResolvedValue([{ spotifyArtistId: 'artist' }]),
     };
-    const musicBrainzService = {
-      searchAlbums: jest.fn(),
-      searchArtists: jest.fn().mockResolvedValue([
-        {
-          id: 'artist-mbid',
-          musicbrainzArtistId: 'artist-mbid',
-          name: 'Prince',
-          imageUrl: 'https://images.example/prince.jpg',
-          source: 'musicbrainz',
-        },
-      ]),
-    };
-    const spotifyService = {
-      searchAlbums: jest.fn(),
-      searchArtists: jest.fn(),
-    };
-    const service = new MusicSearchService(
-      musicBrainzService as any,
-      spotifyService as any,
+    const service = new MusicSearchService(metadata as any);
+    await expect(
+      service.searchAlbums('Purple Rain', 10, 0, 'US'),
+    ).resolves.toHaveLength(1);
+    await expect(service.searchArtists('Prince', 10, 0)).resolves.toHaveLength(
+      1,
     );
-
-    const result = await service.searchArtists('Prince', 10, 0);
-
-    expect(musicBrainzService.searchArtists).toHaveBeenCalledWith(
-      'Prince',
+    expect(metadata.searchAlbums).toHaveBeenCalledWith(
+      'Purple Rain',
       10,
       0,
+      'US',
     );
-    expect(spotifyService.searchArtists).not.toHaveBeenCalled();
-    expect(result).toEqual([
-      expect.objectContaining({
-        musicbrainzArtistId: 'artist-mbid',
-        imageUrl: 'https://images.example/prince.jpg',
-        source: 'musicbrainz',
-      }),
-    ]);
+    expect(metadata.searchArtists).toHaveBeenCalledWith('Prince', 10, 0);
   });
 });

@@ -131,9 +131,71 @@ describe('SpotifyService', () => {
 
     const searchUrl = new URL((global.fetch as jest.Mock).mock.calls[1][0]);
     expect(searchUrl.searchParams.get('q')).toBe('test query');
-    expect(searchUrl.searchParams.get('limit')).toBe('25');
+    expect(searchUrl.searchParams.get('limit')).toBe('10');
     expect(searchUrl.searchParams.get('offset')).toBe('0');
     expect(searchUrl.searchParams.get('market')).toBe('US');
+  });
+
+  it('collects every track page without following an untrusted next URL', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ access_token: 'token', expires_in: 3600 }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            items: [{ id: 'track-1' }],
+            next: 'https://untrusted.example/steal-token',
+          }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ items: [{ id: 'track-2' }], next: null }),
+        ),
+      );
+    expect(await service.getAlbumTracks('album')).toEqual([
+      { id: 'track-1' },
+      { id: 'track-2' },
+    ]);
+    const finalUrl = new URL((global.fetch as jest.Mock).mock.calls[2][0]);
+    expect(finalUrl.hostname).toBe('api.spotify.com');
+    expect(finalUrl.searchParams.get('offset')).toBe('1');
+  });
+
+  it('returns retry timing for rate limits without leaking upstream bodies', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({ access_token: 'token', expires_in: 3600 }),
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response('private upstream details', {
+          status: 429,
+          headers: { 'retry-after': '30' },
+        }),
+      );
+    try {
+      await service.getAlbum('album');
+      throw new Error('Expected 429');
+    } catch (error) {
+      expect(error.getStatus()).toBe(429);
+      expect(error.getResponse()).toEqual({
+        message: 'Spotify rate limit reached. Retry later.',
+        retryAfterSeconds: 30,
+      });
+    }
+  });
+
+  it('rejects configured hosts that could receive Spotify tokens', async () => {
+    process.env.SPOTIFY_BASE_URL = 'https://untrusted.example/v1';
+    await expect(service.getAlbum('album')).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(global.fetch).not.toHaveBeenCalled();
   });
 
   it('throws when Spotify credentials are missing', async () => {

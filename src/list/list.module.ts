@@ -7,9 +7,13 @@ import { AlbumList } from './list.entity';
 import { User } from '../user/user.entity';
 import { UserFollow } from '../user/follow.entity';
 import { ListLike } from './list-like.entity';
+import { MetadataModule } from '../metadata/metadata.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([AlbumList, User, UserFollow, ListLike])],
+  imports: [
+    TypeOrmModule.forFeature([AlbumList, User, UserFollow, ListLike]),
+    MetadataModule,
+  ],
   controllers: [ListController, AdminListController],
   providers: [ListService],
 })
