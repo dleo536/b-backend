@@ -24,6 +24,7 @@ Frontend:
 - `app/logic/albumIdentity.js` and `Review.js` keep Spotify IDs out of MusicBrainz fields.
 - `MetadataAttribution.js` adds a Spotify icon and link beside Spotify metadata/artwork; `MetadataImage.js` preserves complete Spotify image framing.
 - Album, artist, search, review, list, home feed, profile, user, year, new-release, and country-result screens display the attribution. Spotify images are not used beneath the album header gradient or in overlapping list-cover collages.
+- Search and profile favorites use the shared backend catalog search helper. The old `searchMusicBrainzAlbums` export remains as a compatibility alias; it follows the backend provider switch. List editing also preserves Spotify artwork framing and displays its link-back. Cover Art Archive URL fallbacks are restricted to explicit MusicBrainz metadata.
 - List editing/reordering retains each original stored list reference.
 - The existing list visual preview shows Spotify attribution, but downloading a visual containing Spotify metadata/artwork is disabled: its native renderer does not include Spotify attribution/link-backs.
 
@@ -50,7 +51,7 @@ MUSICBRAINZ_BASE_URL=https://musicbrainz-full.bsides.pro/ws/2
 
 Existing `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USERNAME`, `DB_PASSWORD`, Firebase configuration, and `PORT` are still required. See `.env.example`.
 
-Selection is read at backend startup. `MUSIC_METADATA_PROVIDER` takes precedence over the old `MUSIC_SEARCH_PROVIDER`. If both are absent, the existing MusicBrainz behavior remains the default. Invalid provider names fail startup.
+Selection is read at backend startup. `MUSIC_METADATA_PROVIDER` takes precedence over the old `MUSIC_SEARCH_PROVIDER`. If both are absent, Spotify is the default. Invalid provider names fail startup. Local `.env` and `.env.prod` select Spotify explicitly; those ignored files do not configure Cloud Run. Set `MUSIC_METADATA_PROVIDER=spotify` in the hosted service's environment as well, especially if it has an older `MUSIC_SEARCH_PROVIDER=musicbrainz` setting, and deploy/restart the backend. No frontend provider setting is required for the shared album/artist search routes.
 
 Only official Spotify API/account URLs are accepted. Credentials/tokens remain server-side. No Spotify pages are scraped. Spotify search requests are capped at 10 results per request to support current development-mode limits; tracks and artist albums are paginated. Spotify entitlement, quota, and catalog availability still depend on the configured Spotify application.
 

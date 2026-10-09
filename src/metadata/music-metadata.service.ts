@@ -31,7 +31,7 @@ export class MusicMetadataService {
     const configured = (
       process.env.MUSIC_METADATA_PROVIDER ||
       process.env.MUSIC_SEARCH_PROVIDER ||
-      'musicbrainz'
+      'spotify'
     )
       .trim()
       .toLowerCase();
