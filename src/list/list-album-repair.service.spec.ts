@@ -7,7 +7,7 @@ const listId = '22222222-2222-4222-8222-222222222222';
 const moderator: any = {
   uid: 'mod-uid',
   appUserId: 'mod-profile',
-  email: 'dannyapolisttest@gmail.com',
+  email: 'dannyapolistest@gmail.com',
   email_verified: true,
 };
 const input = {

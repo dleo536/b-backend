@@ -12,13 +12,18 @@ describe('list repair moderator authorization', () => {
       activate({
         uid: 'uid',
         appUserId: 'profile',
-        email: 'dannyapolisttest@gmail.com',
+        email: 'dannyapolistest@gmail.com',
         email_verified: true,
       }),
     ).toBe(true);
   });
   it.each([
     undefined,
+    {
+      appUserId: 'profile',
+      email: 'dannyapolisttest@gmail.com',
+      email_verified: true,
+    },
     {
       roles: ['mod'],
       appUserId: 'profile',
@@ -34,10 +39,10 @@ describe('list repair moderator authorization', () => {
     },
     {
       appUserId: 'profile',
-      email: 'dannyapolisttest@gmail.com',
+      email: 'dannyapolistest@gmail.com',
       email_verified: false,
     },
-    { email: 'dannyapolisttest@gmail.com', email_verified: true },
+    { email: 'dannyapolistest@gmail.com', email_verified: true },
   ])('rejects unauthorized requests: %j', (user) => {
     expect(() => activate(user)).toThrow(ForbiddenException);
   });

@@ -4,7 +4,7 @@ import type { AuthenticatedUser } from './auth-user.interface';
 
 // A single account is eligible. Trust Firebase's verified token email, never
 // the editable profile email or roles supplied by a mobile request.
-const LIST_REPAIR_MODERATOR_EMAIL = 'dannyapolisttest@gmail.com';
+const LIST_REPAIR_MODERATOR_EMAIL = 'dannyapolistest@gmail.com';
 
 export const isDesignatedModeratorEmail = (email?: string) =>
   email?.trim().toLowerCase() === LIST_REPAIR_MODERATOR_EMAIL;
@@ -17,6 +17,6 @@ export function isListRepairModerator(token: DecodedIdToken): boolean {
 
 export function assertListRepairModerator(user: AuthenticatedUser) {
   if (!user?.appUserId || !isListRepairModerator(user)) {
-    throw new ForbiddenException('List repair moderator access required');
+    throw new ForbiddenException('Moderator access required');
   }
 }

@@ -128,6 +128,10 @@ export class UserController {
         moderatorEmailVerificationRequired:
           isDesignatedModeratorEmail(currentUser.email) &&
           currentUser.email_verified !== true,
+        isModerator:
+          Boolean(currentUser.appUserId) && isListRepairModerator(currentUser),
+        canManageLists:
+          Boolean(currentUser.appUserId) && isListRepairModerator(currentUser),
         canRepairLists:
           Boolean(currentUser.appUserId) && isListRepairModerator(currentUser),
       }));

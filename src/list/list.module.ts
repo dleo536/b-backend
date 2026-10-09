@@ -11,6 +11,7 @@ import { MetadataModule } from '../metadata/metadata.module';
 import { SpotifyModule } from '../spotify/spotify.module';
 import { ModeratorListController } from './moderator-list.controller';
 import { ListAlbumRepairService } from './list-album-repair.service';
+import { ModeratorListService } from './moderator-list.service';
 
 @Module({
   imports: [
@@ -19,6 +20,6 @@ import { ListAlbumRepairService } from './list-album-repair.service';
     SpotifyModule,
   ],
   controllers: [ListController, AdminListController, ModeratorListController],
-  providers: [ListService, ListAlbumRepairService],
+  providers: [ListService, ListAlbumRepairService, ModeratorListService],
 })
 export class ListModule {}

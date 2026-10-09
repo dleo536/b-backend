@@ -6,6 +6,7 @@ import {
   Param,
   ParseIntPipe,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -16,6 +17,11 @@ import { ListRepairModeratorGuard } from '../auth/list-repair-moderator.guard';
 import type { AuthenticatedUser } from '../auth/auth-user.interface';
 import { SpotifyRateLimitGuard } from '../spotify/spotify-rate-limit.guard';
 import { ListAlbumRepairService } from './list-album-repair.service';
+import { ModeratorListService } from './moderator-list.service';
+import {
+  AddModeratorAlbumDto,
+  EditModeratorAlbumsDto,
+} from './dto/moderator-albums.dto';
 import {
   ApplyAlbumRepairDto,
   PreviewAlbumRepairDto,
@@ -24,7 +30,26 @@ import {
 @Controller('moderator/lists')
 @UseGuards(FirebaseAuthGuard, ListRepairModeratorGuard, SpotifyRateLimitGuard)
 export class ModeratorListController {
-  constructor(private readonly repairs: ListAlbumRepairService) {}
+  constructor(
+    private readonly repairs: ListAlbumRepairService,
+    private readonly lists: ModeratorListService,
+  ) {}
+  @Post(':id/albums')
+  addAlbum(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() input: AddModeratorAlbumDto,
+  ) {
+    return this.lists.addAlbum(user, id, input.albumId);
+  }
+  @Patch(':id/albums')
+  editAlbums(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() input: EditModeratorAlbumsDto,
+  ) {
+    return this.lists.editAlbums(user, id, input);
+  }
   @Get()
   findAll(
     @CurrentUser() user: AuthenticatedUser,

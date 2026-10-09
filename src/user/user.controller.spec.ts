@@ -6,7 +6,7 @@ describe('UserController moderator capability', () => {
       {
         findByOauthIdOrThrow: async () => ({
           id: 'profile',
-          email: 'dannyapolisttest@gmail.com',
+          email: 'dannyapolistest@gmail.com',
         }),
       } as any,
       {} as any,
@@ -20,23 +20,28 @@ describe('UserController moderator capability', () => {
       roles: ['user'],
     } as any);
     expect(outsider.canRepairLists).toBe(false);
+    expect(outsider.canManageLists).toBe(false);
+    expect(outsider.isModerator).toBe(false);
     const moderator = await controller.getMe({
       uid: 'mod',
       appUserId: 'profile',
-      email: 'dannyapolisttest@gmail.com',
+      email: 'dannyapolistest@gmail.com',
       email_verified: true,
       roles: ['user', 'mod'],
     } as any);
     expect(moderator.canRepairLists).toBe(true);
+    expect(moderator.canManageLists).toBe(true);
+    expect(moderator.isModerator).toBe(true);
     expect(moderator.roles).toContain('mod');
     const unverified = await controller.getMe({
       uid: 'mod',
       appUserId: 'profile',
-      email: 'dannyapolisttest@gmail.com',
+      email: 'dannyapolistest@gmail.com',
       email_verified: false,
       roles: ['user'],
     } as any);
     expect(unverified.canRepairLists).toBe(false);
+    expect(unverified.canManageLists).toBe(false);
     expect(unverified.moderatorEmailVerificationRequired).toBe(true);
   });
 });
