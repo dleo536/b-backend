@@ -8,13 +8,17 @@ import { User } from '../user/user.entity';
 import { UserFollow } from '../user/follow.entity';
 import { ListLike } from './list-like.entity';
 import { MetadataModule } from '../metadata/metadata.module';
+import { SpotifyModule } from '../spotify/spotify.module';
+import { ModeratorListController } from './moderator-list.controller';
+import { ListAlbumRepairService } from './list-album-repair.service';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([AlbumList, User, UserFollow, ListLike]),
     MetadataModule,
+    SpotifyModule,
   ],
-  controllers: [ListController, AdminListController],
-  providers: [ListService],
+  controllers: [ListController, AdminListController, ModeratorListController],
+  providers: [ListService, ListAlbumRepairService],
 })
 export class ListModule {}

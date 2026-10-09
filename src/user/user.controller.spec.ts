@@ -1,5 +1,46 @@
 import { UserController } from './user.controller';
 
+describe('UserController moderator capability', () => {
+  it('exposes the capability only for the designated verified token identity', async () => {
+    const controller = new UserController(
+      {
+        findByOauthIdOrThrow: async () => ({
+          id: 'profile',
+          email: 'dannyapolisttest@gmail.com',
+        }),
+      } as any,
+      {} as any,
+      {} as any,
+    );
+    const outsider = await controller.getMe({
+      uid: 'other',
+      appUserId: 'profile',
+      email: 'other@example.com',
+      email_verified: true,
+      roles: ['user'],
+    } as any);
+    expect(outsider.canRepairLists).toBe(false);
+    const moderator = await controller.getMe({
+      uid: 'mod',
+      appUserId: 'profile',
+      email: 'dannyapolisttest@gmail.com',
+      email_verified: true,
+      roles: ['user', 'mod'],
+    } as any);
+    expect(moderator.canRepairLists).toBe(true);
+    expect(moderator.roles).toContain('mod');
+    const unverified = await controller.getMe({
+      uid: 'mod',
+      appUserId: 'profile',
+      email: 'dannyapolisttest@gmail.com',
+      email_verified: false,
+      roles: ['user'],
+    } as any);
+    expect(unverified.canRepairLists).toBe(false);
+    expect(unverified.moderatorEmailVerificationRequired).toBe(true);
+  });
+});
+
 describe('UserController account deletion', () => {
   it('deletes the stored avatar from the backend before removing the user', async () => {
     const userService = {
@@ -124,14 +165,14 @@ describe('UserController onboarding details', () => {
     );
 
     const result = await controller.updateMyOnboardingDetails(
-        { uid: 'firebase-uid-1' } as any,
-        {
-          dateOfBirth: '2000-01-15',
-          cityName: 'Chicago',
-          locationSource: 'manual',
-          bio: 'Hi, I like local shows.',
-        },
-      );
+      { uid: 'firebase-uid-1' } as any,
+      {
+        dateOfBirth: '2000-01-15',
+        cityName: 'Chicago',
+        locationSource: 'manual',
+        bio: 'Hi, I like local shows.',
+      },
+    );
 
     expect(userService.updateOnboardingDetails).toHaveBeenCalledWith(
       'firebase-uid-1',

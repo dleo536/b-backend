@@ -61,6 +61,50 @@ describe('AuthUserContextService', () => {
     );
   });
 
+  it('grants the moderator role only to the designated verified Firebase identity', async () => {
+    (userRepository.findOne as jest.Mock).mockResolvedValue({
+      id: 'moderator-id',
+      roles: [UserRole.USER],
+    });
+    const result = await service.buildAuthenticatedUser({
+      uid: 'moderator-uid',
+      email: 'Dannyapolisttest@gmail.com',
+      email_verified: true,
+    } as any);
+    expect(result.roles).toEqual([UserRole.USER, UserRole.MOD]);
+    expect(result.isAdmin).toBe(false);
+  });
+
+  it.each([
+    { email: 'someone@example.com', email_verified: true },
+    { email: 'dannyapolisttest@gmail.com', email_verified: false },
+    { email: 'dannyapolisttest@gmail.com' },
+  ])(
+    'ignores stored moderator roles and profile emails for ineligible identities: %j',
+    async (token) => {
+      (userRepository.findOne as jest.Mock).mockResolvedValue({
+        id: 'user-id',
+        email: 'dannyapolisttest@gmail.com',
+        roles: [UserRole.MOD],
+      });
+      const result = await service.buildAuthenticatedUser({
+        uid: 'other-uid',
+        ...token,
+      } as any);
+      expect(result.roles).toEqual([UserRole.USER]);
+    },
+  );
+
+  it('does not grant repair access before an app profile exists', async () => {
+    (userRepository.findOne as jest.Mock).mockResolvedValue(null);
+    const result = await service.buildAuthenticatedUser({
+      uid: 'new-uid',
+      email: 'dannyapolisttest@gmail.com',
+      email_verified: true,
+    } as any);
+    expect(result.roles).toEqual([UserRole.USER]);
+  });
+
   it('rejects suspended admins before allowing admin actions', async () => {
     (userRepository.findOne as jest.Mock).mockResolvedValue({
       id: 'app-user-1',

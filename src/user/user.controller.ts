@@ -27,6 +27,10 @@ import {
   toSelfUserResponse,
 } from './user-response';
 import { AuthProvider, type User } from './user.entity';
+import {
+  isDesignatedModeratorEmail,
+  isListRepairModerator,
+} from '../auth/list-repair-moderator';
 
 const parseNonNegativeInt = (
   value: string | undefined,
@@ -50,9 +54,7 @@ export class UserController {
     private readonly moderationService: ModerationService,
   ) {}
 
-  private mapFirebaseProvider(
-    firebaseProvider?: string,
-  ): User['authProvider'] {
+  private mapFirebaseProvider(firebaseProvider?: string): User['authProvider'] {
     if (firebaseProvider === 'google.com') {
       return AuthProvider.GOOGLE;
     }
@@ -120,7 +122,15 @@ export class UserController {
   getMe(@CurrentUser() currentUser: AuthenticatedUser) {
     return this.userService
       .findByOauthIdOrThrow(currentUser.uid)
-      .then((user) => toSelfUserResponse(user));
+      .then((user) => ({
+        ...toSelfUserResponse(user),
+        roles: currentUser.roles,
+        moderatorEmailVerificationRequired:
+          isDesignatedModeratorEmail(currentUser.email) &&
+          currentUser.email_verified !== true,
+        canRepairLists:
+          Boolean(currentUser.appUserId) && isListRepairModerator(currentUser),
+      }));
   }
 
   @UseGuards(FirebaseAuthGuard)

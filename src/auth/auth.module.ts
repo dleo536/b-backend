@@ -6,6 +6,7 @@ import { OptionalFirebaseAuthGuard } from './optional-firebase-auth.guard';
 import { AuthUserContextService } from './auth-user-context.service';
 import { User } from '../user/user.entity';
 import { AdminGuard } from './admin.guard';
+import { ListRepairModeratorGuard } from './list-repair-moderator.guard';
 
 @Global()
 @Module({
@@ -16,6 +17,7 @@ import { AdminGuard } from './admin.guard';
     FirebaseAuthGuard,
     OptionalFirebaseAuthGuard,
     AdminGuard,
+    ListRepairModeratorGuard,
   ],
   exports: [
     FirebaseAdminService,
@@ -23,6 +25,7 @@ import { AdminGuard } from './admin.guard';
     FirebaseAuthGuard,
     OptionalFirebaseAuthGuard,
     AdminGuard,
+    ListRepairModeratorGuard,
   ],
 })
 export class AuthModule {}

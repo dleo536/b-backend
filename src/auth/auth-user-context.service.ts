@@ -8,6 +8,7 @@ import { DecodedIdToken } from 'firebase-admin/auth';
 import { Repository } from 'typeorm';
 import { AuthenticatedUser } from './auth-user.interface';
 import { User, UserRole } from '../user/user.entity';
+import { isListRepairModerator } from './list-repair-moderator';
 
 @Injectable()
 export class AuthUserContextService {
@@ -44,7 +45,12 @@ export class AuthUserContextService {
       where: { oauthId: decodedToken.uid },
     });
     this.ensureUserIsActive(appUser);
-    const roles = this.normalizeRoles(appUser?.roles);
+    const roles: UserRole[] = this.normalizeRoles(appUser?.roles).filter(
+      (role) => role !== UserRole.MOD,
+    );
+    if (appUser && isListRepairModerator(decodedToken))
+      roles.push(UserRole.MOD);
+    if (!roles.length) roles.push(UserRole.USER);
 
     return {
       ...(decodedToken as AuthenticatedUser),
